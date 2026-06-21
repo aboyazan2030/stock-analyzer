@@ -1,24 +1,15 @@
 """
-Stock Data Fetcher - Alpha Vantage API
-Supports Saudi (Tadawul .SR) and US markets
+Stock Data Fetcher - Stooq + yfinance fallback
+Free, no API key needed, supports Saudi and US markets
 """
 import requests
 import logging
+import io
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
-
-AV_BASE = "https://www.alphavantage.co/query"
-
-
-def get_api_key() -> str:
-    import streamlit as st
-    try:
-        return st.secrets.get("ALPHA_VANTAGE_KEY", os.environ.get("ALPHA_VANTAGE_KEY", ""))
-    except Exception:
-        return os.environ.get("ALPHA_VANTAGE_KEY", "")
 
 
 def to_yahoo_symbol(symbol: str, market: str) -> str:
@@ -32,195 +23,263 @@ def to_yahoo_symbol(symbol: str, market: str) -> str:
     return f"{s}.SR"
 
 
-def to_av_symbol(symbol: str, market: str) -> str:
-    """Alpha Vantage uses different format for Saudi stocks"""
+def to_stooq_symbol(symbol: str, market: str) -> str:
     s = symbol.upper().strip()
     if market == "us":
-        return s
+        return f"{s}.US"
     if s.isdigit() and len(s) == 4:
         return f"{s}.SR"
-    return s
+    return f"{s}.SR"
 
 
 class StockDataService:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
 
-    def get_all(self, symbol: str, market: str) -> Dict[str, Any]:
-        api_key = get_api_key()
-        av_sym = to_av_symbol(symbol, market)
-        yahoo_sym = to_yahoo_symbol(symbol, market)
+    def _fetch_stooq_history(self, stooq_sym: str) -> Optional[Dict]:
+        """Fetch historical data from Stooq"""
+        try:
+            url = f"https://stooq.com/q/d/l/?s={stooq_sym.lower()}&i=d"
+            r = self.session.get(url, timeout=15)
+            if r.status_code != 200 or "No data" in r.text or len(r.text) < 50:
+                return None
 
-        logger.info(f"Fetching: {symbol} -> {av_sym}")
+            lines = r.text.strip().split("\n")
+            if len(lines) < 2:
+                return None
+
+            dates, opens, highs, lows, closes, volumes = [], [], [], [], [], []
+            for line in lines[1:]:
+                parts = line.strip().split(",")
+                if len(parts) < 5:
+                    continue
+                try:
+                    dates.append(parts[0])
+                    opens.append(float(parts[1]))
+                    highs.append(float(parts[2]))
+                    lows.append(float(parts[3]))
+                    closes.append(float(parts[4]))
+                    volumes.append(int(float(parts[5])) if len(parts) > 5 and parts[5].strip() else 0)
+                except (ValueError, IndexError):
+                    continue
+
+            if not closes:
+                return None
+
+            # Keep last 120 days
+            dates   = dates[-120:]
+            opens   = opens[-120:]
+            highs   = highs[-120:]
+            lows    = lows[-120:]
+            closes  = closes[-120:]
+            volumes = volumes[-120:]
+
+            return {
+                "dates":   dates,
+                "opens":   opens,
+                "highs":   highs,
+                "lows":    lows,
+                "closes":  closes,
+                "volumes": volumes,
+                "count":   len(dates),
+                "last_price": closes[-1] if closes else None,
+                "last_date":  dates[-1]  if dates  else None,
+            }
+        except Exception as e:
+            logger.warning(f"Stooq error for {stooq_sym}: {e}")
+            return None
+
+    def _fetch_yfinance(self, yahoo_sym: str) -> Optional[Dict]:
+        """Fallback: fetch via yfinance"""
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(yahoo_sym)
+            info   = ticker.info or {}
+            hist   = ticker.history(period="6mo")
+
+            result = {"info": info, "hist": hist}
+            return result if (info.get("regularMarketPrice") or not hist.empty) else None
+        except Exception as e:
+            logger.warning(f"yfinance error for {yahoo_sym}: {e}")
+            return None
+
+    def get_all(self, symbol: str, market: str) -> Dict[str, Any]:
+        yahoo_sym  = to_yahoo_symbol(symbol, market)
+        stooq_sym  = to_stooq_symbol(symbol, market)
+
+        logger.info(f"Fetching: {symbol} -> stooq={stooq_sym}, yahoo={yahoo_sym}")
 
         out = {
             "requested_symbol": symbol.upper(),
-            "yahoo_symbol": yahoo_sym,
-            "market": market,
-            "fetched_at": datetime.now().isoformat(),
-            "quote": None,
-            "chart": None,
-            "fundamentals": None,
-            "news": [],
-            "errors": [],
-            "data_quality": "none",
+            "yahoo_symbol":     yahoo_sym,
+            "market":           market,
+            "fetched_at":       datetime.now().isoformat(),
+            "quote":            None,
+            "chart":            None,
+            "fundamentals":     None,
+            "news":             [],
+            "errors":           [],
+            "data_quality":     "none",
         }
 
-        if not api_key:
-            raise ValueError("مفتاح Alpha Vantage API غير موجود. أضفه في Streamlit Secrets.")
+        # ── 1. Try Stooq for historical data ──────────────────────────
+        stooq_data = self._fetch_stooq_history(stooq_sym)
 
-        # 1. Quote - Global Quote
-        try:
-            r = self.session.get(AV_BASE, params={
-                "function": "GLOBAL_QUOTE",
-                "symbol": av_sym,
-                "apikey": api_key,
-            }, timeout=15)
-            data = r.json()
-            gq = data.get("Global Quote", {})
+        if stooq_data:
+            out["chart"] = {
+                "symbol":   yahoo_sym,
+                "currency": "SAR" if market == "saudi" else "USD",
+                **{k: stooq_data[k] for k in ["dates","opens","highs","lows","closes","volumes","count"]},
+            }
+            last_price = stooq_data["last_price"]
+            logger.info(f"Stooq OK: {stooq_sym} @ {last_price}")
 
-            if gq and gq.get("05. price"):
-                price = float(gq.get("05. price", 0))
-                prev_close = float(gq.get("08. previous close", 0))
-                change = float(gq.get("09. change", 0))
-                change_pct = gq.get("10. change percent", "0%").replace("%", "")
-
+            # Build basic quote from chart data
+            if last_price and len(stooq_data["closes"]) >= 2:
+                prev_close = stooq_data["closes"][-2]
+                change     = last_price - prev_close
+                change_pct = (change / prev_close * 100) if prev_close else 0
                 out["quote"] = {
-                    "symbol": yahoo_sym,
-                    "name": symbol.upper(),
-                    "exchange": "SR" if market == "saudi" else "US",
-                    "currency": "SAR" if market == "saudi" else "USD",
-                    "price": price,
-                    "prev_close": prev_close,
-                    "open": float(gq.get("02. open", 0)),
-                    "day_high": float(gq.get("03. high", 0)),
-                    "day_low": float(gq.get("04. low", 0)),
-                    "change": change,
-                    "change_pct": float(change_pct) if change_pct else 0,
-                    "volume": int(gq.get("06. volume", 0)),
-                    "market_cap": None,
-                    "week52_high": None,
-                    "week52_low": None,
-                    "pe_ratio": None,
-                    "forward_pe": None,
-                    "pb_ratio": None,
-                    "div_yield": None,
+                    "symbol":      yahoo_sym,
+                    "name":        symbol.upper(),
+                    "exchange":    "TADAWUL" if market == "saudi" else "US",
+                    "currency":    "SAR" if market == "saudi" else "USD",
+                    "price":       round(last_price, 3),
+                    "prev_close":  round(prev_close, 3),
+                    "open":        stooq_data["opens"][-1],
+                    "day_high":    stooq_data["highs"][-1],
+                    "day_low":     stooq_data["lows"][-1],
+                    "change":      round(change, 3),
+                    "change_pct":  round(change_pct, 2),
+                    "volume":      stooq_data["volumes"][-1],
+                    "market_cap":  None,
+                    "week52_high": max(stooq_data["highs"][-252:]) if len(stooq_data["highs"]) >= 2 else None,
+                    "week52_low":  min(stooq_data["lows"][-252:])  if len(stooq_data["lows"])  >= 2 else None,
+                    "pe_ratio":    None,
+                    "forward_pe":  None,
+                    "pb_ratio":    None,
+                    "div_yield":   None,
                 }
-                logger.info(f"Quote OK: {av_sym} @ {price}")
-            else:
-                out["errors"].append("price_unavailable")
-                logger.warning(f"No quote data for {av_sym}. Response: {data}")
-        except Exception as e:
-            out["errors"].append("price_unavailable")
-            logger.error(f"Quote error: {e}")
-
-        # 2. Chart - Daily adjusted
-        try:
-            r = self.session.get(AV_BASE, params={
-                "function": "TIME_SERIES_DAILY",
-                "symbol": av_sym,
-                "outputsize": "compact",
-                "apikey": api_key,
-            }, timeout=20)
-            data = r.json()
-            ts = data.get("Time Series (Daily)", {})
-
-            if ts:
-                dates = sorted(ts.keys())[-120:]
-                out["chart"] = {
-                    "symbol": yahoo_sym,
-                    "currency": "SAR" if market == "saudi" else "USD",
-                    "dates":   dates,
-                    "opens":   [float(ts[d]["1. open"])   for d in dates],
-                    "highs":   [float(ts[d]["2. high"])   for d in dates],
-                    "lows":    [float(ts[d]["3. low"])    for d in dates],
-                    "closes":  [float(ts[d]["4. close"])  for d in dates],
-                    "volumes": [int(ts[d]["5. volume"])   for d in dates],
-                    "count":   len(dates),
-                }
-                logger.info(f"Chart OK: {av_sym} ({len(dates)} bars)")
-            else:
-                out["errors"].append("chart_unavailable")
-                logger.warning(f"No chart data for {av_sym}")
-        except Exception as e:
-            out["errors"].append("chart_unavailable")
-            logger.error(f"Chart error: {e}")
-
-        # 3. Company Overview (Fundamentals) - US stocks only
-        if market == "us":
-            try:
-                r = self.session.get(AV_BASE, params={
-                    "function": "OVERVIEW",
-                    "symbol": av_sym,
-                    "apikey": api_key,
-                }, timeout=15)
-                ov = r.json()
-
-                if ov and ov.get("Symbol"):
-                    def safe_float(v):
-                        try: return float(v) if v and v != "None" else None
-                        except: return None
-
-                    fins = {
-                        "sector":         ov.get("Sector", ""),
-                        "industry":       ov.get("Industry", ""),
-                        "description":    ov.get("Description", "")[:600],
-                        "country":        ov.get("Country", ""),
-                        "employees":      safe_float(ov.get("FullTimeEmployees")),
-                        "pe_ratio":       safe_float(ov.get("TrailingPE")),
-                        "forward_pe":     safe_float(ov.get("ForwardPE")),
-                        "pb_ratio":       safe_float(ov.get("PriceToBookRatio")),
-                        "beta":           safe_float(ov.get("Beta")),
-                        "div_yield":      safe_float(ov.get("DividendYield")),
-                        "payout_ratio":   safe_float(ov.get("PayoutRatio")),
-                        "roe":            safe_float(ov.get("ReturnOnEquityTTM")),
-                        "roa":            safe_float(ov.get("ReturnOnAssetsTTM")),
-                        "gross_margin":   safe_float(ov.get("GrossProfitTTM")),
-                        "op_margin":      safe_float(ov.get("OperatingMarginTTM")),
-                        "net_margin":     safe_float(ov.get("ProfitMargin")),
-                        "rev_growth":     safe_float(ov.get("QuarterlyRevenueGrowthYOY")),
-                        "earn_growth":    safe_float(ov.get("QuarterlyEarningsGrowthYOY")),
-                        "debt_to_equity": safe_float(ov.get("DebtToEquityRatio")),
-                        "eps_ttm":        safe_float(ov.get("EPS")),
-                        "book_value":     safe_float(ov.get("BookValue")),
-                        "target_price":   safe_float(ov.get("AnalystTargetPrice")),
-                        "analyst_rec":    ov.get("AnalystRatingStrongBuy", ""),
-                        "free_cash_flow": safe_float(ov.get("OperatingCashflowTTM")),
-                        "total_revenue":  safe_float(ov.get("RevenueTTM")),
-                        "market_cap":     safe_float(ov.get("MarketCapitalization")),
-                        "week52_high":    safe_float(ov.get("52WeekHigh")),
-                        "week52_low":     safe_float(ov.get("52WeekLow")),
-                        "shares":         safe_float(ov.get("SharesOutstanding")),
-                    }
-                    out["fundamentals"] = fins
-
-                    # Update quote with better data
-                    if out["quote"]:
-                        out["quote"]["market_cap"] = fins.get("market_cap")
-                        out["quote"]["week52_high"] = fins.get("week52_high")
-                        out["quote"]["week52_low"] = fins.get("week52_low")
-                        out["quote"]["pe_ratio"] = fins.get("pe_ratio")
-                        out["quote"]["pb_ratio"] = fins.get("pb_ratio")
-                        out["quote"]["div_yield"] = fins.get("div_yield")
-                        out["quote"]["name"] = ov.get("Name", symbol)
-
-                    logger.info(f"Fundamentals OK: {av_sym}")
-                else:
-                    out["errors"].append("fundamentals_unavailable")
-            except Exception as e:
-                out["errors"].append("fundamentals_unavailable")
-                logger.error(f"Fundamentals error: {e}")
         else:
-            out["errors"].append("fundamentals_unavailable")
+            out["errors"].append("stooq_unavailable")
+            logger.warning(f"Stooq failed for {stooq_sym}, trying yfinance...")
 
-        # Quality check
+        # ── 2. Try yfinance for richer data ───────────────────────────
+        yf_data = self._fetch_yfinance(yahoo_sym)
+
+        if yf_data:
+            info = yf_data.get("info", {})
+            hist = yf_data.get("hist")
+
+            # Update quote with richer yfinance data
+            yf_price = (info.get("regularMarketPrice") or
+                        info.get("currentPrice") or
+                        (hist["Close"].iloc[-1] if hist is not None and not hist.empty else None))
+
+            if yf_price:
+                out["quote"] = {
+                    "symbol":      yahoo_sym,
+                    "name":        info.get("longName") or info.get("shortName", symbol),
+                    "exchange":    info.get("exchange", ""),
+                    "currency":    info.get("currency", "SAR" if market == "saudi" else "USD"),
+                    "price":       yf_price,
+                    "prev_close":  info.get("regularMarketPreviousClose") or info.get("previousClose"),
+                    "open":        info.get("regularMarketOpen")  or info.get("open"),
+                    "day_high":    info.get("regularMarketDayHigh") or info.get("dayHigh"),
+                    "day_low":     info.get("regularMarketDayLow")  or info.get("dayLow"),
+                    "change":      info.get("regularMarketChange"),
+                    "change_pct":  info.get("regularMarketChangePercent"),
+                    "volume":      info.get("regularMarketVolume") or info.get("volume"),
+                    "market_cap":  info.get("marketCap"),
+                    "week52_high": info.get("fiftyTwoWeekHigh"),
+                    "week52_low":  info.get("fiftyTwoWeekLow"),
+                    "pe_ratio":    info.get("trailingPE"),
+                    "forward_pe":  info.get("forwardPE"),
+                    "pb_ratio":    info.get("priceToBook"),
+                    "div_yield":   info.get("dividendYield"),
+                }
+                logger.info(f"yfinance quote OK: {yahoo_sym} @ {yf_price}")
+
+            # Chart from yfinance if Stooq failed
+            if not out["chart"] and hist is not None and not hist.empty:
+                out["chart"] = {
+                    "symbol":   yahoo_sym,
+                    "currency": info.get("currency", "USD"),
+                    "dates":    [d.strftime("%Y-%m-%d") for d in hist.index],
+                    "opens":    list(hist["Open"].round(3)),
+                    "highs":    list(hist["High"].round(3)),
+                    "lows":     list(hist["Low"].round(3)),
+                    "closes":   list(hist["Close"].round(3)),
+                    "volumes":  [int(v) for v in hist["Volume"]],
+                    "count":    len(hist),
+                }
+                logger.info(f"yfinance chart OK: {yahoo_sym}")
+
+            # Fundamentals from yfinance
+            if info and info.get("sector"):
+                out["fundamentals"] = {
+                    "sector":         info.get("sector", ""),
+                    "industry":       info.get("industry", ""),
+                    "description":    info.get("longBusinessSummary", "")[:600],
+                    "country":        info.get("country", ""),
+                    "employees":      info.get("fullTimeEmployees"),
+                    "pe_ratio":       info.get("trailingPE"),
+                    "forward_pe":     info.get("forwardPE"),
+                    "pb_ratio":       info.get("priceToBook"),
+                    "beta":           info.get("beta"),
+                    "div_yield":      info.get("dividendYield"),
+                    "payout_ratio":   info.get("payoutRatio"),
+                    "roe":            info.get("returnOnEquity"),
+                    "roa":            info.get("returnOnAssets"),
+                    "gross_margin":   info.get("grossMargins"),
+                    "op_margin":      info.get("operatingMargins"),
+                    "net_margin":     info.get("profitMargins"),
+                    "rev_growth":     info.get("revenueGrowth"),
+                    "earn_growth":    info.get("earningsGrowth"),
+                    "debt_to_equity": info.get("debtToEquity"),
+                    "current_ratio":  info.get("currentRatio"),
+                    "free_cash_flow": info.get("freeCashflow"),
+                    "total_revenue":  info.get("totalRevenue"),
+                    "eps_ttm":        info.get("trailingEps"),
+                    "eps_fwd":        info.get("forwardEps"),
+                    "book_value":     info.get("bookValue"),
+                    "shares":         info.get("sharesOutstanding"),
+                    "target_price":   info.get("targetMeanPrice"),
+                    "analyst_rec":    info.get("recommendationKey", ""),
+                }
+                logger.info(f"yfinance fundamentals OK: {yahoo_sym}")
+            else:
+                out["errors"].append("fundamentals_unavailable")
+
+            # News
+            try:
+                import yfinance as yf
+                ticker   = yf.Ticker(yahoo_sym)
+                news_raw = ticker.news or []
+                out["news"] = [
+                    {
+                        "title":   n.get("title", ""),
+                        "summary": n.get("summary", ""),
+                        "link":    n.get("link", ""),
+                        "date":    datetime.fromtimestamp(
+                            n.get("providerPublishTime", 0)
+                        ).strftime("%Y-%m-%d") if n.get("providerPublishTime") else "",
+                    }
+                    for n in news_raw[:8]
+                ]
+            except Exception:
+                pass
+        else:
+            out["errors"].append("yfinance_unavailable")
+
+        # ── Quality Gate ──────────────────────────────────────────────
         if not out["quote"] and not out["chart"]:
             raise ValueError(
                 f"لم يتم العثور على بيانات للرمز '{symbol}'. "
-                "تأكد من صحة الرمز والسوق، أو تحقق من مفتاح API."
+                "تأكد من صحة الرمز والسوق."
             )
 
         if out["quote"] and out["chart"]:
@@ -228,5 +287,5 @@ class StockDataService:
         elif out["quote"] or out["chart"]:
             out["data_quality"] = "partial"
 
-        logger.info(f"Done: {av_sym} quality={out['data_quality']}")
+        logger.info(f"Done: {yahoo_sym} quality={out['data_quality']} errors={out['errors']}")
         return out
