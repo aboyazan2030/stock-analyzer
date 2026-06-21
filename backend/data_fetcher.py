@@ -1,11 +1,8 @@
 """
-Stock Data Fetcher
-Supports Saudi (Tadawul .SR) and US markets via Yahoo Finance.
-Symbol validation: always verifies returned symbol matches requested symbol.
+Stock Data Fetcher - uses yfinance library
+Supports Saudi (Tadawul .SR) and US markets
 """
-import requests
 import logging
-import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -13,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 
 def to_yahoo_symbol(symbol: str, market: str) -> str:
-    """Convert user symbol to Yahoo Finance ticker."""
     s = symbol.upper().strip()
     if market == "us":
         return s
@@ -24,324 +20,161 @@ def to_yahoo_symbol(symbol: str, market: str) -> str:
     return f"{s}.SR"
 
 
-class YahooFetcher:
-    BASES = [
-        "https://query1.finance.yahoo.com",
-        "https://query2.finance.yahoo.com",
-    ]
-    HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
-        ),
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://finance.yahoo.com/",
-        "Origin": "https://finance.yahoo.com",
-    }
-
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update(self.HEADERS)
-        self._crumb: Optional[str] = None
-        self._inited = False
-
-    def _init_session(self):
-        if self._inited:
-            return
-        try:
-            r = self.session.get("https://finance.yahoo.com/quote/AAPL",
-                                  timeout=10, allow_redirects=True)
-            if r.status_code == 200:
-                rc = self.session.get(
-                    "https://query1.finance.yahoo.com/v1/test/getcrumb",
-                    timeout=8
-                )
-                if rc.status_code == 200 and rc.text.strip():
-                    self._crumb = rc.text.strip()
-        except Exception as e:
-            logger.debug(f"Session init: {e}")
-        finally:
-            self._inited = True
-
-    def _params(self, extra: dict = None) -> dict:
-        p = {}
-        if self._crumb:
-            p["crumb"] = self._crumb
-        if extra:
-            p.update(extra)
-        return p
-
-    def fetch_quote(self, yahoo_sym: str) -> Optional[Dict]:
-        self._init_session()
-        fields = (
-            "regularMarketPrice,regularMarketChange,regularMarketChangePercent,"
-            "regularMarketVolume,regularMarketDayHigh,regularMarketDayLow,"
-            "regularMarketOpen,regularMarketPreviousClose,"
-            "fiftyTwoWeekHigh,fiftyTwoWeekLow,marketCap,"
-            "trailingPE,forwardPE,priceToBook,dividendYield,"
-            "shortName,longName,financialCurrency,exchange,sector"
-        )
-        for base in self.BASES:
-            try:
-                r = self.session.get(
-                    f"{base}/v7/finance/quote",
-                    params=self._params({"symbols": yahoo_sym, "fields": fields}),
-                    timeout=12
-                )
-                if r.status_code != 200:
-                    continue
-                data = r.json()
-                results = data.get("quoteResponse", {}).get("result", [])
-                if not results:
-                    continue
-                q = results[0]
-                returned = q.get("symbol", "").upper()
-                if returned != yahoo_sym.upper():
-                    logger.error(f"SYMBOL MISMATCH: asked={yahoo_sym} got={returned}")
-                    return None
-                logger.info(f"Quote OK: {yahoo_sym} @ {q.get('regularMarketPrice')}")
-                return q
-            except Exception as e:
-                logger.warning(f"Quote error ({base}): {e}")
-        return None
-
-    def fetch_chart(self, yahoo_sym: str, range_val: str = "6mo") -> Optional[Dict]:
-        self._init_session()
-        interval = "1wk" if range_val in ("2y", "5y") else "1d"
-        for base in self.BASES:
-            try:
-                r = self.session.get(
-                    f"{base}/v8/finance/chart/{yahoo_sym}",
-                    params=self._params({"interval": interval, "range": range_val,
-                                          "includePrePost": "false"}),
-                    timeout=15
-                )
-                if r.status_code != 200:
-                    continue
-                data = r.json()
-                results = data.get("chart", {}).get("result", [])
-                if not results:
-                    continue
-                meta = results[0].get("meta", {})
-                returned = meta.get("symbol", "").upper()
-                if returned != yahoo_sym.upper():
-                    logger.error(f"CHART MISMATCH: asked={yahoo_sym} got={returned}")
-                    return None
-                logger.info(f"Chart OK: {yahoo_sym} ({len(results[0].get('timestamp',[]))} bars)")
-                return results[0]
-            except Exception as e:
-                logger.warning(f"Chart error ({base}): {e}")
-        return None
-
-    def fetch_fundamentals(self, yahoo_sym: str) -> Optional[Dict]:
-        self._init_session()
-        modules = ",".join([
-            "summaryDetail", "financialData", "defaultKeyStatistics",
-            "incomeStatementHistory", "balanceSheetHistory",
-            "cashflowStatementHistory", "assetProfile", "earnings"
-        ])
-        for base in self.BASES:
-            try:
-                r = self.session.get(
-                    f"{base}/v10/finance/quoteSummary/{yahoo_sym}",
-                    params=self._params({"modules": modules}),
-                    timeout=18
-                )
-                if r.status_code != 200:
-                    continue
-                data = r.json()
-                results = data.get("quoteSummary", {}).get("result", [])
-                if results:
-                    logger.info(f"Fundamentals OK: {yahoo_sym}")
-                    return results[0]
-            except Exception as e:
-                logger.warning(f"Fundamentals error ({base}): {e}")
-        return None
-
-    def fetch_news(self, yahoo_sym: str, count: int = 8) -> List[Dict]:
-        self._init_session()
-        news = []
-        try:
-            url = (
-                f"https://feeds.finance.yahoo.com/rss/2.0/headline"
-                f"?s={yahoo_sym}&region=US&lang=en-US"
-            )
-            r = self.session.get(url, timeout=10)
-            if r.status_code == 200:
-                root = ET.fromstring(r.text)
-                for item in root.findall(".//item")[:count]:
-                    news.append({
-                        "title":   item.findtext("title", "").strip(),
-                        "summary": item.findtext("description", "").strip(),
-                        "link":    item.findtext("link", "").strip(),
-                        "date":    item.findtext("pubDate", "").strip(),
-                    })
-                logger.info(f"News OK: {yahoo_sym} ({len(news)} items)")
-        except Exception as e:
-            logger.warning(f"News error: {e}")
-        return news
-
-
-def _safe(d: dict, *keys):
-    for k in keys:
-        if isinstance(d, dict):
-            v = d.get(k)
-            if isinstance(v, dict):
-                return v.get("raw")
-            if v is not None:
-                return v
-    return None
-
-
-def parse_quote(q: Dict) -> Dict:
-    return {
-        "symbol":      q.get("symbol"),
-        "name":        q.get("longName") or q.get("shortName", ""),
-        "exchange":    q.get("exchange", ""),
-        "currency":    q.get("financialCurrency") or q.get("currency", ""),
-        "price":       q.get("regularMarketPrice"),
-        "prev_close":  q.get("regularMarketPreviousClose"),
-        "open":        q.get("regularMarketOpen"),
-        "day_high":    q.get("regularMarketDayHigh"),
-        "day_low":     q.get("regularMarketDayLow"),
-        "change":      q.get("regularMarketChange"),
-        "change_pct":  q.get("regularMarketChangePercent"),
-        "volume":      q.get("regularMarketVolume"),
-        "market_cap":  q.get("marketCap"),
-        "week52_high": q.get("fiftyTwoWeekHigh"),
-        "week52_low":  q.get("fiftyTwoWeekLow"),
-        "pe_ratio":    q.get("trailingPE"),
-        "forward_pe":  q.get("forwardPE"),
-        "pb_ratio":    q.get("priceToBook"),
-        "div_yield":   q.get("dividendYield"),
-    }
-
-
-def parse_chart(c: Dict) -> Dict:
-    meta = c.get("meta", {})
-    ts   = c.get("timestamp", [])
-    ind  = c.get("indicators", {}).get("quote", [{}])[0]
-    rows = [
-        (datetime.fromtimestamp(t).strftime("%Y-%m-%d"), o, h, l, cl, v)
-        for t, o, h, l, cl, v in zip(
-            ts, ind.get("open",[]), ind.get("high",[]),
-            ind.get("low",[]), ind.get("close",[]), ind.get("volume",[])
-        )
-        if cl is not None and h is not None and l is not None
-    ]
-    return {
-        "symbol":   meta.get("symbol"),
-        "currency": meta.get("currency", ""),
-        "dates":    [r[0] for r in rows],
-        "opens":    [r[1] for r in rows],
-        "highs":    [r[2] for r in rows],
-        "lows":     [r[3] for r in rows],
-        "closes":   [r[4] for r in rows],
-        "volumes":  [r[5] for r in rows],
-        "count":    len(rows),
-    }
-
-
-def parse_fundamentals(f: Dict) -> Dict:
-    sd = f.get("summaryDetail", {})
-    fd = f.get("financialData", {})
-    ks = f.get("defaultKeyStatistics", {})
-    ap = f.get("assetProfile", {})
-    earn = f.get("earnings", {})
-    q_earnings = []
-    for q in earn.get("earningsChart", {}).get("quarterly", []):
-        q_earnings.append({
-            "date": q.get("date", ""),
-            "actual": _safe(q, "actual"),
-            "estimate": _safe(q, "estimate"),
-        })
-    return {
-        "sector": ap.get("sector", ""),
-        "industry": ap.get("industry", ""),
-        "description": ap.get("longBusinessSummary", "")[:600],
-        "country": ap.get("country", ""),
-        "employees": ap.get("fullTimeEmployees"),
-        "pe_ratio": _safe(sd, "trailingPE"),
-        "forward_pe": _safe(sd, "forwardPE"),
-        "pb_ratio": _safe(sd, "priceToBook"),
-        "ps_ratio": _safe(ks, "priceToSalesTrailing12Months"),
-        "ev_ebitda": _safe(ks, "enterpriseToEbitda"),
-        "beta": _safe(sd, "beta"),
-        "div_yield": _safe(sd, "dividendYield"),
-        "div_rate": _safe(sd, "dividendRate"),
-        "payout_ratio": _safe(sd, "payoutRatio"),
-        "roe": _safe(fd, "returnOnEquity"),
-        "roa": _safe(fd, "returnOnAssets"),
-        "gross_margin": _safe(fd, "grossMargins"),
-        "op_margin": _safe(fd, "operatingMargins"),
-        "net_margin": _safe(fd, "profitMargins"),
-        "rev_growth": _safe(fd, "revenueGrowth"),
-        "earn_growth": _safe(fd, "earningsGrowth"),
-        "debt_to_equity": _safe(fd, "debtToEquity"),
-        "current_ratio": _safe(fd, "currentRatio"),
-        "quick_ratio": _safe(fd, "quickRatio"),
-        "total_debt": _safe(fd, "totalDebt"),
-        "total_revenue": _safe(fd, "totalRevenue"),
-        "free_cash_flow": _safe(fd, "freeCashflow"),
-        "eps_ttm": _safe(ks, "trailingEps"),
-        "eps_fwd": _safe(ks, "forwardEps"),
-        "book_value": _safe(ks, "bookValue"),
-        "shares": _safe(ks, "sharesOutstanding"),
-        "52w_change": _safe(ks, "52WeekChange"),
-        "target_price": _safe(fd, "targetMeanPrice"),
-        "target_low": _safe(fd, "targetLowPrice"),
-        "target_high": _safe(fd, "targetHighPrice"),
-        "analyst_rec": fd.get("recommendationKey", ""),
-        "analyst_count": _safe(fd, "numberOfAnalystOpinions"),
-        "quarterly_eps": q_earnings,
-    }
-
-
 class StockDataService:
-    def __init__(self):
-        self.fetcher = YahooFetcher()
-
     def get_all(self, symbol: str, market: str) -> Dict[str, Any]:
+        import yfinance as yf
+
         yahoo_sym = to_yahoo_symbol(symbol, market)
-        logger.info(f"=== START: {symbol} -> {yahoo_sym} (market={market}) ===")
+        logger.info(f"Fetching: {symbol} -> {yahoo_sym}")
+
         out = {
             "requested_symbol": symbol.upper(),
             "yahoo_symbol": yahoo_sym,
             "market": market,
             "fetched_at": datetime.now().isoformat(),
-            "quote": None, "chart": None, "fundamentals": None,
-            "news": [], "errors": [], "data_quality": "none",
+            "quote": None,
+            "chart": None,
+            "fundamentals": None,
+            "news": [],
+            "errors": [],
+            "data_quality": "none",
         }
-        raw_quote = self.fetcher.fetch_quote(yahoo_sym)
-        if raw_quote:
-            out["quote"] = parse_quote(raw_quote)
-        else:
-            out["errors"].append("price_unavailable")
 
-        raw_chart = self.fetcher.fetch_chart(yahoo_sym, "6mo")
-        if raw_chart:
-            out["chart"] = parse_chart(raw_chart)
-        else:
-            out["errors"].append("chart_unavailable")
+        try:
+            ticker = yf.Ticker(yahoo_sym)
 
-        raw_fins = self.fetcher.fetch_fundamentals(yahoo_sym)
-        if raw_fins:
-            out["fundamentals"] = parse_fundamentals(raw_fins)
-        else:
-            out["errors"].append("fundamentals_unavailable")
+            # Quote
+            info = ticker.info
+            if info and info.get("regularMarketPrice"):
+                # Verify symbol
+                returned = info.get("symbol", "").upper()
+                if returned and returned != yahoo_sym.upper():
+                    logger.error(f"Symbol mismatch: asked={yahoo_sym} got={returned}")
+                    raise ValueError(f"Symbol mismatch: {returned} != {yahoo_sym}")
 
-        out["news"] = self.fetcher.fetch_news(yahoo_sym)
+                out["quote"] = {
+                    "symbol": yahoo_sym,
+                    "name": info.get("longName") or info.get("shortName", ""),
+                    "exchange": info.get("exchange", ""),
+                    "currency": info.get("currency", ""),
+                    "price": info.get("regularMarketPrice") or info.get("currentPrice"),
+                    "prev_close": info.get("regularMarketPreviousClose") or info.get("previousClose"),
+                    "open": info.get("regularMarketOpen") or info.get("open"),
+                    "day_high": info.get("regularMarketDayHigh") or info.get("dayHigh"),
+                    "day_low": info.get("regularMarketDayLow") or info.get("dayLow"),
+                    "change": info.get("regularMarketChange"),
+                    "change_pct": info.get("regularMarketChangePercent"),
+                    "volume": info.get("regularMarketVolume") or info.get("volume"),
+                    "market_cap": info.get("marketCap"),
+                    "week52_high": info.get("fiftyTwoWeekHigh"),
+                    "week52_low": info.get("fiftyTwoWeekLow"),
+                    "pe_ratio": info.get("trailingPE"),
+                    "forward_pe": info.get("forwardPE"),
+                    "pb_ratio": info.get("priceToBook"),
+                    "div_yield": info.get("dividendYield"),
+                }
+                logger.info(f"Quote OK: {yahoo_sym} @ {out['quote']['price']}")
+            else:
+                out["errors"].append("price_unavailable")
+                logger.warning(f"No price for {yahoo_sym}")
 
+            # Chart
+            try:
+                hist = ticker.history(period="6mo")
+                if not hist.empty:
+                    out["chart"] = {
+                        "symbol": yahoo_sym,
+                        "currency": info.get("currency", ""),
+                        "dates": [d.strftime("%Y-%m-%d") for d in hist.index],
+                        "opens": list(hist["Open"].round(3)),
+                        "highs": list(hist["High"].round(3)),
+                        "lows": list(hist["Low"].round(3)),
+                        "closes": list(hist["Close"].round(3)),
+                        "volumes": [int(v) for v in hist["Volume"]],
+                        "count": len(hist),
+                    }
+                    logger.info(f"Chart OK: {yahoo_sym} ({len(hist)} bars)")
+                else:
+                    out["errors"].append("chart_unavailable")
+            except Exception as e:
+                out["errors"].append("chart_unavailable")
+                logger.warning(f"Chart error: {e}")
+
+            # Fundamentals
+            try:
+                fins = {}
+                fins["sector"]          = info.get("sector", "")
+                fins["industry"]        = info.get("industry", "")
+                fins["description"]     = info.get("longBusinessSummary", "")[:600]
+                fins["country"]         = info.get("country", "")
+                fins["employees"]       = info.get("fullTimeEmployees")
+                fins["pe_ratio"]        = info.get("trailingPE")
+                fins["forward_pe"]      = info.get("forwardPE")
+                fins["pb_ratio"]        = info.get("priceToBook")
+                fins["beta"]            = info.get("beta")
+                fins["div_yield"]       = info.get("dividendYield")
+                fins["payout_ratio"]    = info.get("payoutRatio")
+                fins["roe"]             = info.get("returnOnEquity")
+                fins["roa"]             = info.get("returnOnAssets")
+                fins["gross_margin"]    = info.get("grossMargins")
+                fins["op_margin"]       = info.get("operatingMargins")
+                fins["net_margin"]      = info.get("profitMargins")
+                fins["rev_growth"]      = info.get("revenueGrowth")
+                fins["earn_growth"]     = info.get("earningsGrowth")
+                fins["debt_to_equity"]  = info.get("debtToEquity")
+                fins["current_ratio"]   = info.get("currentRatio")
+                fins["quick_ratio"]     = info.get("quickRatio")
+                fins["free_cash_flow"]  = info.get("freeCashflow")
+                fins["total_revenue"]   = info.get("totalRevenue")
+                fins["total_debt"]      = info.get("totalDebt")
+                fins["eps_ttm"]         = info.get("trailingEps")
+                fins["eps_fwd"]         = info.get("forwardEps")
+                fins["book_value"]      = info.get("bookValue")
+                fins["shares"]          = info.get("sharesOutstanding")
+                fins["target_price"]    = info.get("targetMeanPrice")
+                fins["target_low"]      = info.get("targetLowPrice")
+                fins["target_high"]     = info.get("targetHighPrice")
+                fins["analyst_rec"]     = info.get("recommendationKey", "")
+                fins["analyst_count"]   = info.get("numberOfAnalystOpinions")
+                out["fundamentals"] = fins
+                logger.info(f"Fundamentals OK: {yahoo_sym}")
+            except Exception as e:
+                out["errors"].append("fundamentals_unavailable")
+                logger.warning(f"Fundamentals error: {e}")
+
+            # News
+            try:
+                news_raw = ticker.news or []
+                out["news"] = [
+                    {
+                        "title":   n.get("title", ""),
+                        "summary": n.get("summary", ""),
+                        "link":    n.get("link", ""),
+                        "date":    datetime.fromtimestamp(n.get("providerPublishTime", 0)).strftime("%Y-%m-%d") if n.get("providerPublishTime") else "",
+                    }
+                    for n in news_raw[:8]
+                ]
+                logger.info(f"News OK: {len(out['news'])} items")
+            except Exception as e:
+                logger.warning(f"News error: {e}")
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"Error fetching {yahoo_sym}: {e}")
+            out["errors"].append(str(e))
+
+        # Quality check
         if not out["quote"] and not out["chart"]:
             raise ValueError(
                 f"لم يتم العثور على بيانات للرمز '{symbol}'. "
                 "تأكد من صحة الرمز والسوق."
             )
+
         if out["quote"] and out["chart"]:
             out["data_quality"] = "full"
         elif out["quote"] or out["chart"]:
             out["data_quality"] = "partial"
 
-        logger.info(f"=== END: {yahoo_sym} quality={out['data_quality']} ===")
+        logger.info(f"Done: {yahoo_sym} quality={out['data_quality']}")
         return out
