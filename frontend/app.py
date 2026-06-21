@@ -690,7 +690,7 @@ def main():
         with st.expander("📄 بيانات السعر الخام"):
             st.json(quote)
         with st.expander("📊 إحصائيات البيانات التاريخية"):
-            chart = raw.get("chart", {})
+            chart = raw.get("chart") or {}
             st.json({
                 "symbol": chart.get("symbol"),
                 "bars_count": chart.get("count"),
