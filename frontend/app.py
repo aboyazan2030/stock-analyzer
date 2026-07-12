@@ -231,11 +231,8 @@ def build_chart(chart_data: dict, technical: dict, symbol: str, currency: str = 
             low=lows,
             close=closes,
             name="السعر",
-            increasing_line_color="#00E676",
-            decreasing_line_color="#FF3D5A",
-            increasing_fillcolor="#00E67640",
-            decreasing_fillcolor="#FF3D5A40",
-            line=dict(width=1),
+            increasing=dict(line=dict(color="#00E676", width=1), fillcolor="#00E676"),
+            decreasing=dict(line=dict(color="#FF3D5A", width=1), fillcolor="#FF3D5A"),
         ),
         row=1, col=1
     )
