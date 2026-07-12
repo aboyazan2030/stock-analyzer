@@ -1,6 +1,6 @@
 """
 Fundamental Analysis, News Sentiment & AI Recommendation Engine
-Uses Claude AI to generate professional Arabic analysis report
+Uses Claude AI (if available) or Smart Rule-Based fallback
 """
 import requests
 import json
@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 # ─── Fundamental Scoring ─────────────────────────────────────────────────────
 
 def score_fundamentals(fins: Dict) -> Dict:
-    """Score each fundamental metric and calculate overall."""
     if not fins:
         return {"overall_score": 50, "rating": "غير متاح", "details": {}}
 
@@ -23,7 +22,6 @@ def score_fundamentals(fins: Dict) -> Dict:
     def pct(v):
         return v * 100 if v and abs(v) < 10 else v
 
-    # PE Ratio (lower = better, but not too low)
     pe = fins.get("pe_ratio")
     if pe:
         if 5 < pe < 15:    scores["pe"] = 90
@@ -32,57 +30,46 @@ def score_fundamentals(fins: Dict) -> Dict:
         elif 30 <= pe < 50: scores["pe"] = 45
         else:               scores["pe"] = 25
 
-    # Forward PE
     fpe = fins.get("forward_pe")
     if fpe:
         scores["forward_pe"] = 85 if fpe < 20 else 65 if fpe < 30 else 40
 
-    # P/B Ratio
     pb = fins.get("pb_ratio")
     if pb:
         scores["pb"] = 88 if pb < 1.5 else 72 if pb < 3 else 55 if pb < 5 else 35
 
-    # ROE
     roe = pct(fins.get("roe"))
     if roe:
         scores["roe"] = 92 if roe > 25 else 78 if roe > 15 else 60 if roe > 8 else 35
 
-    # ROA
     roa = pct(fins.get("roa"))
     if roa:
         scores["roa"] = 88 if roa > 15 else 72 if roa > 8 else 55 if roa > 3 else 30
 
-    # Net Margin
     margin = pct(fins.get("net_margin"))
     if margin:
         scores["net_margin"] = 90 if margin > 25 else 75 if margin > 15 else 58 if margin > 8 else 35
 
-    # Revenue Growth
     rev_g = pct(fins.get("rev_growth"))
     if rev_g:
         scores["rev_growth"] = 92 if rev_g > 25 else 78 if rev_g > 10 else 60 if rev_g > 0 else 25
 
-    # Earnings Growth
     earn_g = pct(fins.get("earn_growth") or fins.get("earnings_growth"))
     if earn_g:
         scores["earn_growth"] = 92 if earn_g > 30 else 78 if earn_g > 15 else 60 if earn_g > 0 else 20
 
-    # Debt to Equity
     de = fins.get("debt_to_equity")
     if de:
         scores["debt_to_equity"] = 90 if de < 0.3 else 75 if de < 0.8 else 55 if de < 1.5 else 30
 
-    # Current Ratio
     cr = fins.get("current_ratio")
     if cr:
         scores["current_ratio"] = 88 if cr > 2 else 72 if cr > 1.5 else 55 if cr > 1 else 25
 
-    # Dividend Yield
     div = pct(fins.get("div_yield") or fins.get("dividend_yield"))
     if div and div > 0:
         scores["div_yield"] = 85 if div > 4 else 72 if div > 2 else 60 if div > 0.5 else 45
 
-    # Operating Margin
     op_m = pct(fins.get("op_margin") or fins.get("operating_margin"))
     if op_m:
         scores["op_margin"] = 88 if op_m > 20 else 72 if op_m > 10 else 52 if op_m > 0 else 20
@@ -98,7 +85,6 @@ def score_fundamentals(fins: Dict) -> Dict:
         "ضعيفة"
     )
 
-    # Sector comparison (approximate benchmarks)
     sector = fins.get("sector", "")
     sector_avgs = _get_sector_benchmarks(sector)
 
@@ -227,12 +213,271 @@ def analyze_news_sentiment(news_items: List[Dict]) -> Dict:
         "محايد"
     )
     return {
-        "score":    score,
+        "score":     score,
         "sentiment": overall,
         "pos_count": pos_count,
         "neg_count": neg_count,
         "neu_count": neu_count,
         "analyzed":  analyzed,
+    }
+
+
+# ─── Smart Rule-Based Report (بدون API) ──────────────────────────────────────
+
+def _smart_rule_based_report(
+    symbol: str,
+    price: float,
+    currency: str,
+    tech_score: int,
+    fund_score: int,
+    news_score: int,
+    technical: Dict,
+    fundamentals_score: Dict,
+    news_sentiment: Dict,
+    fins: Dict,
+) -> Dict:
+    """
+    تقرير ذكي مفصّل يُولَّد من البيانات الفعلية بدون الحاجة لـ Claude API.
+    يستخدم المؤشرات الفنية والأساسية والأخبار لبناء تقرير احترافي.
+    """
+
+    # ── استخراج البيانات الفنية ──────────────────────────────────────────────
+    rsi_val   = technical.get("rsi") or 50
+    macd_hist = technical.get("macd_hist") or 0
+    sma20     = technical.get("sma20")
+    sma50     = technical.get("sma50")
+    sma200    = technical.get("sma200")
+    dow       = technical.get("dow", {})
+    elliott   = technical.get("elliott", {})
+    candles   = technical.get("candlesticks", [])
+    liq       = technical.get("liquidity", {})
+    gann      = technical.get("gann", {})
+    sr        = technical.get("support_resistance", {})
+
+    trend     = dow.get("trend", "غير محدد")
+    phase     = dow.get("phase", "")
+    dow_sig   = dow.get("signal", "")
+    ell_wave  = elliott.get("current_wave", "")
+    ell_type  = elliott.get("wave_type", "")
+    ell_tgt   = elliott.get("target")
+    liq_sig   = liq.get("signal", "")
+    obv       = liq.get("obv_trend", "")
+    candle    = candles[0] if candles else {}
+    supports    = sr.get("supports", [])
+    resistances = sr.get("resistances", [])
+
+    # ── حساب التوصية ─────────────────────────────────────────────────────────
+    combined = tech_score * 0.45 + fund_score * 0.30 + news_score * 0.25
+
+    # تعديل بناءً على RSI
+    if rsi_val < 30:
+        combined += 8   # تشبع بيعي = فرصة شراء
+    elif rsi_val > 75:
+        combined -= 8   # تشبع شرائي = تحذير
+
+    # تعديل بناءً على MACD
+    if macd_hist > 0:
+        combined += 3
+    elif macd_hist < 0:
+        combined -= 3
+
+    # تعديل بناءً على اتجاه داو
+    if "صاعد" in trend:
+        combined += 5
+    elif "هابط" in trend:
+        combined -= 5
+
+    combined = max(10, min(95, combined))
+
+    # تحديد التوصية
+    if combined >= 80:
+        action, confidence = "شراء قوي", min(90, round(combined))
+    elif combined >= 68:
+        action, confidence = "شراء", min(82, round(combined))
+    elif combined >= 58:
+        action, confidence = "احتفاظ", min(74, round(combined))
+    elif combined >= 48:
+        action, confidence = "مراقبة", min(65, round(combined))
+    elif combined >= 38:
+        action, confidence = "جني أرباح", min(68, round(100 - combined))
+    else:
+        action, confidence = "بيع", min(78, round(100 - combined))
+
+    # ── حساب الأهداف ووقف الخسارة ────────────────────────────────────────────
+    stop_loss = round(supports[0] * 0.985, 3) if supports else round(price * 0.93, 3)
+    t1 = round(resistances[0] if resistances else price * 1.05, 3)
+    t2 = round(resistances[1] if len(resistances) > 1 else price * 1.10, 3)
+    t3 = round(resistances[2] if len(resistances) > 2 else price * 1.18, 3)
+
+    if price > stop_loss and (t2 - price) > 0:
+        rr = round((t2 - price) / (price - stop_loss), 1)
+    else:
+        rr = 1.5
+
+    # تحديد مدة التوصية
+    if tech_score >= 70 and rsi_val < 50:
+        timeframe = "مضاربة قصيرة (أسبوع)"
+    elif combined >= 65:
+        timeframe = "سوينغ (2-4 أسابيع)"
+    else:
+        timeframe = "متوسط المدى (1-3 أشهر)"
+
+    # ── بناء الملخص التنفيذي ─────────────────────────────────────────────────
+    fund_rating = fundamentals_score.get("rating", "—")
+    news_sent   = news_sentiment.get("sentiment", "محايد")
+
+    # وضع السعر مقارنة بالمتوسطات
+    price_vs_sma = []
+    if sma20 and price > sma20:
+        price_vs_sma.append("فوق المتوسط المتحرك 20")
+    elif sma20 and price < sma20:
+        price_vs_sma.append("تحت المتوسط المتحرك 20")
+    if sma50 and price > sma50:
+        price_vs_sma.append("فوق المتوسط المتحرك 50")
+    elif sma50 and price < sma50:
+        price_vs_sma.append("تحت المتوسط المتحرك 50")
+
+    sma_text = " و".join(price_vs_sma) if price_vs_sma else "موقع السعر من المتوسطات غير محدد"
+
+    rsi_text = (
+        f"RSI عند {rsi_val:.0f} في منطقة تشبع بيعي — فرصة شراء محتملة" if rsi_val < 30 else
+        f"RSI عند {rsi_val:.0f} في منطقة تشبع شرائي — توخَّ الحذر" if rsi_val > 70 else
+        f"RSI عند {rsi_val:.0f} في المنطقة المحايدة — لا توجد إشارات متطرفة"
+    )
+
+    macd_text = (
+        f"MACD إيجابي ({macd_hist:.3f}) — زخم صاعد" if macd_hist > 0 else
+        f"MACD سلبي ({macd_hist:.3f}) — ضغط هابط"
+    )
+
+    executive_summary = (
+        f"سهم {symbol} يُسجّل درجة تقنية {tech_score}/100 وأساسيات {fund_rating} بـ {fund_score}/100. "
+        f"السعر {sma_text}. "
+        f"الاتجاه العام {trend} في مرحلة {phase}. "
+        f"المؤشرات المتكاملة تدعم توصية «{action}» بثقة {confidence}%."
+    )
+
+    # ── التحليل الفني التفصيلي ────────────────────────────────────────────────
+    technical_narrative = (
+        f"**الاتجاه العام ({trend}):** {phase}. "
+        f"نظرية داو تُصدر إشارة «{dow_sig}».\n\n"
+        f"**المؤشرات الرئيسية:** {rsi_text}. {macd_text}.\n\n"
+        f"**موجات إليوت:** السهم في الموجة {ell_wave} ({ell_type})"
+        f"{f' — الهدف المتوقع: {ell_tgt:.2f} {currency}' if ell_tgt else ''}.\n\n"
+        f"**السيولة:** {liq_sig}. OBV في اتجاه {obv}.\n\n"
+        f"**الشموع اليابانية:** {candle.get('name', '—')} — {candle.get('signal', '—')}.\n\n"
+        f"**الدعم والمقاومة:** "
+        f"دعم رئيسي عند {supports[0]:.2f}" if supports else "الدعم غير محدد"
+    )
+    if supports and resistances:
+        technical_narrative += f" — مقاومة رئيسية عند {resistances[0]:.2f}."
+
+    # ── التحليل الأساسي التفصيلي ─────────────────────────────────────────────
+    strengths  = fundamentals_score.get("strengths", [])
+    weaknesses = fundamentals_score.get("weaknesses", [])
+    sector_avgs = fundamentals_score.get("sector_avgs", {})
+
+    pe  = fins.get("pe_ratio")
+    roe = fins.get("roe")
+    div = fins.get("div_yield")
+
+    fund_lines = [f"الأساسيات مُصنَّفة «{fund_rating}» بإجمالي {fund_score}/100."]
+    if pe:
+        avg_pe = sector_avgs.get("pe", 18)
+        fund_lines.append(
+            f"P/E={pe:.1f} {'أقل من' if pe < avg_pe else 'أعلى من'} "
+            f"متوسط القطاع ({avg_pe}) — "
+            f"{'تقييم جذاب' if pe < avg_pe else 'تقييم مرتفع نسبياً'}."
+        )
+    if roe:
+        fund_lines.append(f"ROE={roe*100:.1f}% — {'كفاءة ممتازة' if roe > 0.15 else 'في المستوى المتوسط'}.")
+    if div and div > 0:
+        fund_lines.append(f"عائد التوزيعات {div*100:.1f}% — {'مغرٍ للمستثمرين' if div > 0.03 else 'معتدل'}.")
+
+    fundamental_narrative = " ".join(fund_lines)
+
+    # ── تحليل الأخبار ────────────────────────────────────────────────────────
+    pos_c = news_sentiment.get("pos_count", 0)
+    neg_c = news_sentiment.get("neg_count", 0)
+    neu_c = news_sentiment.get("neu_count", 0)
+    total_news = pos_c + neg_c + neu_c
+
+    if total_news == 0:
+        news_narrative = "لا تتوفر أخبار حديثة للتحليل."
+    else:
+        dominant = "الأخبار الإيجابية" if pos_c > neg_c else "الأخبار السلبية" if neg_c > pos_c else "الأخبار المحايدة"
+        news_narrative = (
+            f"من إجمالي {total_news} خبر: {pos_c} إيجابي، {neg_c} سلبي، {neu_c} محايد. "
+            f"{dominant} هي الغالبة مما يعكس مشاعر {news_sent} تجاه السهم. "
+            f"درجة المشاعر الإعلامية {news_sentiment.get('score', 50)}/100."
+        )
+
+    # ── المحفزات والمخاطر ────────────────────────────────────────────────────
+    catalysts = []
+    risks = []
+
+    # محفزات فنية
+    if "صاعد" in trend:
+        catalysts.append(f"اتجاه {trend} مؤكد بنظرية داو مع {phase}")
+    if rsi_val < 40:
+        catalysts.append(f"RSI={rsi_val:.0f} يشير لمنطقة بيع مفرط — فرصة دخول")
+    if macd_hist > 0:
+        catalysts.append("MACD إيجابي يؤكد الزخم الصاعد")
+    if obv == "صاعد":
+        catalysts.append("OBV صاعد — تدفق مال مؤسسي داخل السهم")
+    if candle.get("bullish"):
+        catalysts.append(f"نموذج شمعة {candle.get('name','')} يدعم الصعود")
+    if strengths:
+        catalysts.extend(strengths[:2])
+
+    # مخاطر فنية
+    if rsi_val > 65:
+        risks.append(f"RSI={rsi_val:.0f} يقترب من منطقة التشبع الشرائي")
+    if "هابط" in trend:
+        risks.append(f"الاتجاه العام {trend} — مخاطر الاستمرار في الهبوط")
+    if macd_hist < 0:
+        risks.append("MACD سلبي — ضغط بيعي مستمر")
+    if resistances:
+        risks.append(f"مقاومة قوية عند {resistances[0]:.2f} قد تحد من الصعود")
+    if weaknesses:
+        risks.extend(weaknesses[:2])
+
+    # تأكد من وجود محفزات ومخاطر كافية
+    if not catalysts:
+        catalysts = ["تحسن محتمل في المؤشرات الفنية", "قوة الأساسيات النسبية", "إشارات السيولة"]
+    if not risks:
+        risks = ["مخاطر السوق العامة", "تقلبات الأسعار الطبيعية", "عدم اليقين الاقتصادي"]
+
+    catalysts = catalysts[:4]
+    risks = risks[:4]
+
+    # ── مبرر التوصية ─────────────────────────────────────────────────────────
+    reasoning = (
+        f"بناءً على التحليل المتكامل: درجة فنية {tech_score}/100 "
+        f"وأساسيات {fund_score}/100 وأخبار {news_sentiment.get('score',50)}/100. "
+        f"الاتجاه {trend} {'يدعم' if 'صاعد' in trend else 'لا يدعم'} قرار الشراء. "
+        f"نسبة المخاطرة/العائد {rr}:1."
+    )
+
+    return {
+        "executive_summary":      executive_summary,
+        "technical_narrative":    technical_narrative,
+        "fundamental_narrative":  fundamental_narrative,
+        "news_narrative":         news_narrative,
+        "risks":                  risks,
+        "catalysts":              catalysts,
+        "recommendation": {
+            "action":      action,
+            "confidence":  confidence,
+            "entry_price": round(float(price), 3),
+            "stop_loss":   stop_loss,
+            "target1":     t1,
+            "target2":     t2,
+            "target3":     t3,
+            "risk_reward": f"1:{rr}",
+            "timeframe":   timeframe,
+            "reasoning":   reasoning,
+        },
     }
 
 
@@ -248,10 +493,6 @@ def generate_ai_report(
     fins: Dict,
     api_key: str,
 ) -> Dict:
-    """
-    Call Claude API to generate professional Arabic analysis report
-    and final recommendation.
-    """
     price    = quote.get("price", 0) if quote else 0
     name     = quote.get("name", symbol) if quote else symbol
     currency = quote.get("currency", "") if quote else ""
@@ -266,13 +507,14 @@ def generate_ai_report(
     dow      = technical.get("dow", {})
     elliott  = technical.get("elliott", {})
     candles  = technical.get("candlesticks", [])
-    gann     = technical.get("gann", {})
     liq      = technical.get("liquidity", {})
     sr       = technical.get("support_resistance", {})
 
     market_ar = "السوق السعودي (تاسي)" if market == "saudi" else "السوق الأمريكي"
 
-    prompt = f"""أنت محلل مالي خبير. حلّل هذا السهم وأصدر توصية احترافية نهائية.
+    # ── محاولة Claude API ────────────────────────────────────────────────────
+    if api_key:
+        prompt = f"""أنت محلل مالي خبير. حلّل هذا السهم وأصدر توصية احترافية نهائية.
 
 السهم: {name} ({symbol}) — {market_ar}
 السعر الحالي: {price} {currency}
@@ -284,7 +526,6 @@ def generate_ai_report(
 • إليوت: الموجة {elliott.get('current_wave','—')} ({elliott.get('wave_type','—')}) — الهدف: {elliott.get('target','—')}
 • شموع: {candles[0]['name'] if candles else '—'} ({candles[0]['signal'] if candles else '—'})
 • السيولة: {liq.get('signal','—')} — {liq.get('ad_trend','—')}
-• جان: {gann.get('angle_pos','—')}
 • دعم 1: {sr.get('supports',[None])[0] if sr.get('supports') else '—'}
 • مقاومة 1: {sr.get('resistances',[None])[0] if sr.get('resistances') else '—'}
 
@@ -323,111 +564,51 @@ def generate_ai_report(
   }}
 }}"""
 
-    try:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "Content-Type":      "application/json",
-                "x-api-key":         api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            json={
-                "model":      "claude-sonnet-4-6",
-                "max_tokens": 2000,
-                "system":     "أنت محلل مالي خبير. أجب بـ JSON صحيح فقط بدون أي نص خارج {}.",
-                "messages":   [{"role": "user", "content": prompt}],
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        content = resp.json()["content"][0]["text"]
-
-        # Extract JSON
-        json_obj = None
         try:
-            json_obj = json.loads(content.strip())
-        except Exception:
-            match = re.search(r'\{[\s\S]*\}', content)
-            if match:
-                json_obj = json.loads(match.group())
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "Content-Type":      "application/json",
+                    "x-api-key":         api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                json={
+                    "model":      "claude-sonnet-4-6",
+                    "max_tokens": 2000,
+                    "system":     "أنت محلل مالي خبير. أجب بـ JSON صحيح فقط بدون أي نص خارج {}.",
+                    "messages":   [{"role": "user", "content": prompt}],
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            content = resp.json()["content"][0]["text"]
 
-        if json_obj:
-            logger.info(f"AI report generated for {symbol}")
-            return json_obj
+            json_obj = None
+            try:
+                json_obj = json.loads(content.strip())
+            except Exception:
+                match = re.search(r'\{[\s\S]*\}', content)
+                if match:
+                    json_obj = json.loads(match.group())
 
-    except Exception as e:
-        logger.error(f"AI report error: {e}")
+            if json_obj:
+                logger.info(f"Claude AI report generated for {symbol}")
+                return json_obj
 
-    # Fallback: rule-based recommendation
-    return _rule_based_recommendation(
-        symbol, price, currency, tech_score, fund_score, news_score,
-        dow, sr, rsi_val, technical.get("macd_hist")
+        except Exception as e:
+            logger.warning(f"Claude API failed, using smart fallback: {e}")
+
+    # ── التقرير الذكي التلقائي (بدون API) ───────────────────────────────────
+    logger.info(f"Generating smart rule-based report for {symbol}")
+    return _smart_rule_based_report(
+        symbol=symbol,
+        price=float(price) if price else 0,
+        currency=currency,
+        tech_score=tech_score,
+        fund_score=fund_score,
+        news_score=news_score,
+        technical=technical,
+        fundamentals_score=fundamentals_score,
+        news_sentiment=news_sentiment,
+        fins=fins,
     )
-
-
-def _rule_based_recommendation(
-    symbol, price, currency, tech_score, fund_score, news_score,
-    dow, sr, rsi_val, macd_hist
-) -> Dict:
-    """Fallback rule-based recommendation when AI unavailable."""
-    combined = tech_score * 0.45 + fund_score * 0.30 + news_score * 0.25
-
-    if combined >= 78 and (rsi_val or 50) < 45:
-        action = "شراء قوي"
-        confidence = min(88, round(combined))
-    elif combined >= 70:
-        action = "شراء"
-        confidence = min(80, round(combined))
-    elif combined >= 60:
-        action = "احتفاظ"
-        confidence = min(72, round(combined))
-    elif combined >= 50:
-        action = "مراقبة"
-        confidence = min(62, round(combined))
-    elif combined >= 40:
-        action = "جني أرباح"
-        confidence = min(65, round(100 - combined))
-    else:
-        action = "بيع"
-        confidence = min(75, round(100 - combined))
-
-    supports    = sr.get("supports",    [price * 0.95])
-    resistances = sr.get("resistances", [price * 1.05])
-    stop_loss = round(supports[0] * 0.98, 3) if supports else round(price * 0.93, 3)
-    t1 = round(resistances[0] if resistances else price * 1.06, 3)
-    t2 = round(resistances[1] if len(resistances) > 1 else price * 1.12, 3)
-    t3 = round(resistances[2] if len(resistances) > 2 else price * 1.20, 3)
-    rr = round((t2 - price) / (price - stop_loss), 1) if price > stop_loss else 1.5
-
-    trend = dow.get("trend", "غير محدد")
-    phase = dow.get("phase", "")
-
-    return {
-        "executive_summary": (
-            f"التحليل الشامل لسهم {symbol} يُشير إلى درجة فنية {tech_score}/100 "
-            f"وأساسيات بدرجة {fund_score}/100. "
-            f"الاتجاه العام {trend} في مرحلة {phase}. "
-            f"المؤشرات تدعم توصية {action}."
-        ),
-        "technical_narrative": (
-            f"الاتجاه {trend}. RSI={rsi_val} "
-            f"({'تشبع بيعي' if rsi_val and rsi_val < 30 else 'تشبع شرائي' if rsi_val and rsi_val > 70 else 'محايد'}). "
-            f"MACD {'إيجابي' if macd_hist and macd_hist > 0 else 'سلبي'}."
-        ),
-        "fundamental_narrative": f"الأساسيات بدرجة {fund_score}/100.",
-        "news_narrative": f"المشاعر الإعلامية درجة {news_score}/100.",
-        "risks":      ["مخاطر السوق العامة", "تقلبات الأسعار", "المخاطر القطاعية"],
-        "catalysts":  ["تحسن المؤشرات الفنية", "قوة الأساسيات", "إشارات السيولة"],
-        "recommendation": {
-            "action":      action,
-            "confidence":  confidence,
-            "entry_price": round(price, 3),
-            "stop_loss":   stop_loss,
-            "target1":     t1,
-            "target2":     t2,
-            "target3":     t3,
-            "risk_reward": f"1:{rr}",
-            "timeframe":   "سوينغ (2-4 أسابيع)",
-            "reasoning":   f"بناءً على التحليل المتكامل: درجة فنية {tech_score}/100 وأساسيات {fund_score}/100.",
-        },
-    }
