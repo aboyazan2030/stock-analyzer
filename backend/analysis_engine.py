@@ -412,44 +412,97 @@ def _smart_rule_based_report(
             f"درجة المشاعر الإعلامية {news_sentiment.get('score', 50)}/100."
         )
 
-    # ── المحفزات والمخاطر ────────────────────────────────────────────────────
+    # ── المحفزات والمخاطر (مفصّلة بالأرقام الفعلية) ─────────────────────────
     catalysts = []
     risks = []
 
-    # محفزات فنية
+    # ── محفزات فنية ──────────────────────────────────────────────────────────
     if "صاعد" in trend:
-        catalysts.append(f"اتجاه {trend} مؤكد بنظرية داو مع {phase}")
-    if rsi_val < 40:
-        catalysts.append(f"RSI={rsi_val:.0f} يشير لمنطقة بيع مفرط — فرصة دخول")
+        catalysts.append(f"اتجاه {trend} مؤكد بنظرية داو — مرحلة {phase} — إشارة: {dow_sig}")
+
+    if rsi_val < 30:
+        catalysts.append(f"RSI={rsi_val:.1f} في منطقة تشبع بيعي (أقل من 30) — فرصة دخول قوية")
+    elif rsi_val < 45:
+        catalysts.append(f"RSI={rsi_val:.1f} في منطقة منخفضة — مساحة جيدة للصعود")
+
     if macd_hist > 0:
-        catalysts.append("MACD إيجابي يؤكد الزخم الصاعد")
+        catalysts.append(f"MACD إيجابي ({macd_hist:.4f}) — زخم صاعد مؤكد")
+
+    if sma20 and price > sma20:
+        catalysts.append(f"السعر ({price:.2f}) فوق SMA20 ({sma20:.2f}) — اتجاه قصير المدى صاعد")
+
+    if sma50 and price > sma50:
+        catalysts.append(f"السعر ({price:.2f}) فوق SMA50 ({sma50:.2f}) — اتجاه متوسط المدى صاعد")
+
     if obv == "صاعد":
-        catalysts.append("OBV صاعد — تدفق مال مؤسسي داخل السهم")
+        catalysts.append(f"OBV صاعد — تدفق سيولة مؤسسية داخل السهم")
+
+    liq_ratio = liq.get("vol_ratio", 0)
+    if liq_ratio and liq_ratio > 1.5:
+        catalysts.append(f"حجم تداول {liq_ratio:.1f}x أعلى من المتوسط — اهتمام مرتفع بالسهم")
+
     if candle.get("bullish"):
-        catalysts.append(f"نموذج شمعة {candle.get('name','')} يدعم الصعود")
+        catalysts.append(f"نموذج شمعة «{candle.get('name','')}» — إشارة {candle.get('signal','')} بقوة {candle.get('strength','')}")
+
+    if ell_wave and "دافع" in (ell_type or ""):
+        catalysts.append(f"موجة إليوت {ell_wave} ({ell_type})" + (f" — هدف {ell_tgt:.2f} {currency}" if ell_tgt else ""))
+
+    if supports:
+        catalysts.append(f"دعم قوي عند {supports[0]:.2f} — قاعدة صلبة للسعر")
+
+    # محفزات أساسية
     if strengths:
         catalysts.extend(strengths[:2])
 
-    # مخاطر فنية
-    if rsi_val > 65:
-        risks.append(f"RSI={rsi_val:.0f} يقترب من منطقة التشبع الشرائي")
-    if "هابط" in trend:
-        risks.append(f"الاتجاه العام {trend} — مخاطر الاستمرار في الهبوط")
+    # ── مخاطر فنية ───────────────────────────────────────────────────────────
+    if rsi_val > 75:
+        risks.append(f"RSI={rsi_val:.1f} في منطقة تشبع شرائي (أعلى من 70) — تصحيح محتمل")
+    elif rsi_val > 65:
+        risks.append(f"RSI={rsi_val:.1f} يقترب من منطقة التشبع الشرائي (70) — توخَّ الحذر")
+
     if macd_hist < 0:
-        risks.append("MACD سلبي — ضغط بيعي مستمر")
+        risks.append(f"MACD سلبي ({macd_hist:.4f}) — ضغط بيعي مستمر")
+
+    if sma20 and price < sma20:
+        risks.append(f"السعر ({price:.2f}) تحت SMA20 ({sma20:.2f}) — ضعف قصير المدى")
+
+    if sma50 and price < sma50:
+        risks.append(f"السعر ({price:.2f}) تحت SMA50 ({sma50:.2f}) — ضعف متوسط المدى")
+
+    if "هابط" in trend:
+        risks.append(f"الاتجاه العام {trend} — خطر الاستمرار في الهبوط")
+
     if resistances:
-        risks.append(f"مقاومة قوية عند {resistances[0]:.2f} قد تحد من الصعود")
+        risks.append(f"مقاومة قوية عند {resistances[0]:.2f} — عائق أمام الصعود")
+    if len(resistances) > 1:
+        risks.append(f"مقاومة ثانية عند {resistances[1]:.2f} — هدف صعب الاختراق")
+
+    if candle.get("bullish") is False:
+        risks.append(f"نموذج شمعة «{candle.get('name','')}» هبوطي — إشارة {candle.get('signal','')}")
+
+    if liq_ratio and liq_ratio < 0.5:
+        risks.append(f"حجم تداول ضعيف ({liq_ratio:.1f}x المتوسط) — سيولة منخفضة")
+
+    # مخاطر أساسية
     if weaknesses:
         risks.extend(weaknesses[:2])
 
-    # تأكد من وجود محفزات ومخاطر كافية
+    # ── تأكد من وجود بنود كافية ──────────────────────────────────────────────
     if not catalysts:
-        catalysts = ["تحسن محتمل في المؤشرات الفنية", "قوة الأساسيات النسبية", "إشارات السيولة"]
+        catalysts = [
+            f"درجة فنية {tech_score}/100 — مستوى مقبول",
+            f"درجة أساسية {fund_score}/100 — {fundamentals_score.get('rating','متوسط')}",
+            "إمكانية تحسن المؤشرات على المدى القريب",
+        ]
     if not risks:
-        risks = ["مخاطر السوق العامة", "تقلبات الأسعار الطبيعية", "عدم اليقين الاقتصادي"]
+        risks = [
+            "مخاطر السوق العامة والتقلبات الطبيعية",
+            f"عدم وجود إشارات فنية واضحة — درجة {tech_score}/100",
+            "يُنصح بالانتظار لتأكيد الاتجاه",
+        ]
 
-    catalysts = catalysts[:4]
-    risks = risks[:4]
+    catalysts = catalysts[:5]
+    risks = risks[:5]
 
     # ── مبرر التوصية ─────────────────────────────────────────────────────────
     reasoning = (
