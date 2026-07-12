@@ -17,6 +17,10 @@ from analysis_engine import (
     score_fundamentals, analyze_news_sentiment, generate_ai_report
 )
 
+# ─── Plotly ───────────────────────────────────────────────────────────────────
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -187,6 +191,324 @@ def score_badge(score: int) -> str:
     return f'<span class="badge {c}">{score}/100</span>'
 
 
+# ─── Chart Builder ────────────────────────────────────────────────────────────
+def build_chart(chart_data: dict, technical: dict, symbol: str, currency: str = "") -> go.Figure:
+    """
+    بناء رسم بياني تفاعلي احترافي يحتوي على:
+    - شموع يابانية (OHLC)
+    - خطوط المتوسطات (SMA 20, 50, 200)
+    - بولينجر باندز
+    - مستويات الدعم والمقاومة
+    - مؤشر RSI
+    - حجم التداول
+    """
+
+    dates   = chart_data.get("dates",   [])
+    opens   = chart_data.get("opens",   [])
+    highs   = chart_data.get("highs",   [])
+    lows    = chart_data.get("lows",    [])
+    closes  = chart_data.get("closes",  [])
+    volumes = chart_data.get("volumes", [])
+
+    if not dates or not closes:
+        return None
+
+    # ── Layout: 3 rows (price 60% | RSI 20% | Volume 20%) ───────────────────
+    fig = make_subplots(
+        rows=3, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.60, 0.20, 0.20],
+        subplot_titles=("", "RSI", "حجم التداول")
+    )
+
+    # ── 1. Candlestick ────────────────────────────────────────────────────────
+    fig.add_trace(
+        go.Candlestick(
+            x=dates,
+            open=opens,
+            high=highs,
+            low=lows,
+            close=closes,
+            name="السعر",
+            increasing_line_color="#00E676",
+            decreasing_line_color="#FF3D5A",
+            increasing_fillcolor="#00E67640",
+            decreasing_fillcolor="#FF3D5A40",
+            line=dict(width=1),
+        ),
+        row=1, col=1
+    )
+
+    # ── 2. Moving Averages ────────────────────────────────────────────────────
+    def compute_sma(values, n):
+        result = []
+        for i in range(len(values)):
+            if i < n - 1:
+                result.append(None)
+            else:
+                result.append(round(sum(values[i-n+1:i+1]) / n, 3))
+        return result
+
+    sma20  = compute_sma(closes, 20)
+    sma50  = compute_sma(closes, min(50, len(closes)))
+    sma200 = compute_sma(closes, min(200, len(closes)))
+
+    fig.add_trace(go.Scatter(
+        x=dates, y=sma20, name="SMA 20",
+        line=dict(color="#00C4FF", width=1.5, dash="solid"),
+        opacity=0.9, hovertemplate="SMA20: %{y:.3f}<extra></extra>"
+    ), row=1, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=dates, y=sma50, name="SMA 50",
+        line=dict(color="#F4C430", width=1.5, dash="solid"),
+        opacity=0.9, hovertemplate="SMA50: %{y:.3f}<extra></extra>"
+    ), row=1, col=1)
+
+    if len(closes) >= 100:
+        fig.add_trace(go.Scatter(
+            x=dates, y=sma200, name="SMA 200",
+            line=dict(color="#FB923C", width=1.5, dash="dot"),
+            opacity=0.8, hovertemplate="SMA200: %{y:.3f}<extra></extra>"
+        ), row=1, col=1)
+
+    # ── 3. Bollinger Bands ────────────────────────────────────────────────────
+    import statistics as stats_lib
+
+    def compute_bollinger(values, n=20, k=2.0):
+        upper, lower, mid = [], [], []
+        for i in range(len(values)):
+            if i < n - 1:
+                upper.append(None); lower.append(None); mid.append(None)
+            else:
+                window = values[i-n+1:i+1]
+                m = sum(window) / n
+                std = stats_lib.stdev(window) if len(window) > 1 else 0
+                mid.append(round(m, 3))
+                upper.append(round(m + k * std, 3))
+                lower.append(round(m - k * std, 3))
+        return upper, mid, lower
+
+    bb_upper, bb_mid, bb_lower = compute_bollinger(closes)
+
+    fig.add_trace(go.Scatter(
+        x=dates, y=bb_upper, name="Bollinger ↑",
+        line=dict(color="#9333EA", width=1, dash="dash"),
+        opacity=0.6, hovertemplate="BB↑: %{y:.3f}<extra></extra>"
+    ), row=1, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=dates, y=bb_lower, name="Bollinger ↓",
+        line=dict(color="#9333EA", width=1, dash="dash"),
+        fill="tonexty",
+        fillcolor="rgba(147,51,234,0.05)",
+        opacity=0.6, hovertemplate="BB↓: %{y:.3f}<extra></extra>"
+    ), row=1, col=1)
+
+    # ── 4. Support & Resistance ───────────────────────────────────────────────
+    sr = technical.get("support_resistance", {})
+    supports    = sr.get("supports", [])
+    resistances = sr.get("resistances", [])
+
+    for level in supports[:3]:
+        if level:
+            fig.add_hline(
+                y=level, row=1, col=1,
+                line=dict(color="#00E676", width=1, dash="dot"),
+                annotation_text=f"دعم {level:.2f}",
+                annotation_position="left",
+                annotation_font=dict(color="#00E676", size=10),
+            )
+
+    for level in resistances[:3]:
+        if level:
+            fig.add_hline(
+                y=level, row=1, col=1,
+                line=dict(color="#FF3D5A", width=1, dash="dot"),
+                annotation_text=f"مقاومة {level:.2f}",
+                annotation_position="left",
+                annotation_font=dict(color="#FF3D5A", size=10),
+            )
+
+    # ── 5. RSI ────────────────────────────────────────────────────────────────
+    def compute_rsi(values, period=14):
+        if len(values) < period + 1:
+            return [None] * len(values)
+        result = [None] * period
+        gains, losses = [], []
+        for i in range(1, period + 1):
+            diff = values[i] - values[i-1]
+            gains.append(max(diff, 0))
+            losses.append(max(-diff, 0))
+        avg_gain = sum(gains) / period
+        avg_loss = sum(losses) / period
+        rs = avg_gain / avg_loss if avg_loss else float("inf")
+        result.append(round(100 - 100 / (1 + rs), 2))
+        for i in range(period + 1, len(values)):
+            diff = values[i] - values[i-1]
+            g = max(diff, 0)
+            l = max(-diff, 0)
+            avg_gain = (avg_gain * (period - 1) + g) / period
+            avg_loss = (avg_loss * (period - 1) + l) / period
+            rs = avg_gain / avg_loss if avg_loss else float("inf")
+            result.append(round(100 - 100 / (1 + rs), 2))
+        return result
+
+    rsi_vals = compute_rsi(closes)
+
+    fig.add_trace(go.Scatter(
+        x=dates, y=rsi_vals, name="RSI",
+        line=dict(color="#00C4FF", width=2),
+        hovertemplate="RSI: %{y:.1f}<extra></extra>"
+    ), row=2, col=1)
+
+    # RSI zones
+    fig.add_hrect(y0=70, y1=100, row=2, col=1,
+                  fillcolor="rgba(255,61,90,0.1)", line_width=0)
+    fig.add_hrect(y0=0, y1=30, row=2, col=1,
+                  fillcolor="rgba(0,230,118,0.1)", line_width=0)
+    fig.add_hline(y=70, row=2, col=1,
+                  line=dict(color="#FF3D5A", width=1, dash="dot"))
+    fig.add_hline(y=30, row=2, col=1,
+                  line=dict(color="#00E676", width=1, dash="dot"))
+    fig.add_hline(y=50, row=2, col=1,
+                  line=dict(color="#6B7A99", width=0.5, dash="dot"))
+
+    # ── 6. Volume Bars ────────────────────────────────────────────────────────
+    vol_colors = []
+    for i in range(len(closes)):
+        if i == 0:
+            vol_colors.append("#00C4FF")
+        elif closes[i] >= closes[i-1]:
+            vol_colors.append("#00E676")
+        else:
+            vol_colors.append("#FF3D5A")
+
+    fig.add_trace(go.Bar(
+        x=dates, y=volumes, name="الحجم",
+        marker_color=vol_colors,
+        opacity=0.7,
+        hovertemplate="الحجم: %{y:,.0f}<extra></extra>"
+    ), row=3, col=1)
+
+    # ── Layout Styling ────────────────────────────────────────────────────────
+    fig.update_layout(
+        title=dict(
+            text=f"📊 {symbol} — الرسم البياني التفاعلي",
+            font=dict(color="#E8EDF5", size=16, family="Cairo"),
+            x=0.5,
+        ),
+        paper_bgcolor="#070B14",
+        plot_bgcolor="#0D1220",
+        font=dict(color="#E8EDF5", family="Cairo"),
+        height=700,
+        margin=dict(l=20, r=20, t=50, b=20),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            bgcolor="rgba(17,24,39,0.8)",
+            bordercolor="#1A2540",
+            borderwidth=1,
+            font=dict(size=11),
+        ),
+        hovermode="x unified",
+        xaxis_rangeslider_visible=False,
+    )
+
+    # Grid styling for all rows
+    for row_n in range(1, 4):
+        xaxis_key = "xaxis" if row_n == 1 else f"xaxis{row_n}"
+        yaxis_key = "yaxis" if row_n == 1 else f"yaxis{row_n}"
+
+        fig.update_layout(**{
+            xaxis_key: dict(
+                gridcolor="#1A2540",
+                gridwidth=0.5,
+                showgrid=True,
+                zeroline=False,
+                tickfont=dict(color="#6B7A99", size=10),
+                showspikes=True,
+                spikecolor="#00C4FF",
+                spikethickness=1,
+                spikedash="dot",
+            ),
+            yaxis_key: dict(
+                gridcolor="#1A2540",
+                gridwidth=0.5,
+                showgrid=True,
+                zeroline=False,
+                tickfont=dict(color="#6B7A99", size=10),
+                side="right",
+                showspikes=True,
+                spikecolor="#00C4FF",
+                spikethickness=1,
+            ),
+        })
+
+    # RSI y-axis range
+    fig.update_layout(yaxis2=dict(range=[0, 100], tickvals=[30, 50, 70]))
+
+    # Subplot titles styling
+    for ann in fig.layout.annotations:
+        ann.font.color = "#6B7A99"
+        ann.font.size  = 11
+
+    return fig
+
+
+def show_chart_controls(chart_data: dict) -> dict:
+    """عرض خيارات تحكم الرسم البياني"""
+    dates  = chart_data.get("dates", [])
+    closes = chart_data.get("closes", [])
+    total  = len(dates)
+
+    col1, col2, col3 = st.columns([2, 2, 1])
+
+    with col1:
+        period_options = {
+            "شهر (30 يوم)": 30,
+            "3 أشهر": 90,
+            "6 أشهر (الكل)": total,
+        }
+        if total >= 120:
+            period_options["4 أشهر"] = 120
+        selected_period = st.selectbox(
+            "الفترة الزمنية",
+            options=list(period_options.keys()),
+            index=2,
+            key="chart_period"
+        )
+        n = period_options[selected_period]
+
+    with col2:
+        show_options = st.multiselect(
+            "عناصر الرسم",
+            ["SMA", "Bollinger", "دعم/مقاومة"],
+            default=["SMA", "Bollinger", "دعم/مقاومة"],
+            key="chart_elements"
+        )
+
+    with col3:
+        chart_type = st.radio(
+            "نوع الرسم",
+            ["شموع", "خطي"],
+            index=0,
+            key="chart_type"
+        )
+
+    return {
+        "n": n,
+        "show_sma": "SMA" in show_options,
+        "show_bb": "Bollinger" in show_options,
+        "show_sr": "دعم/مقاومة" in show_options,
+        "chart_type": chart_type,
+    }
+
+
 # ─── Main App ─────────────────────────────────────────────────────────────────
 def main():
     # Sidebar
@@ -239,7 +561,7 @@ def main():
                         st.rerun()
 
         st.markdown("---")
-        st.caption("الإصدار 3.0 | تحليل ذكي متكامل")
+        st.caption("الإصدار 4.0 | تحليل ذكي + رسم بياني تفاعلي")
 
     # Handle quick select
     if "quick_symbol" in st.session_state:
@@ -265,7 +587,7 @@ def main():
             ("📊", "تحليل أساسي", "14 مؤشر مالي مع مقارنة القطاع"),
             ("🤖", "ذكاء اصطناعي", "Claude AI يدمج كل التحليلات في تقرير احترافي"),
             ("🎯", "توصية نهائية", "شراء/بيع مع أهداف ووقف خسارة"),
-            ("📰", "تحليل الأخبار", "تصنيف الأخبار وقياس تأثيرها"),
+            ("🕯️", "رسم بياني تفاعلي", "شموع يابانية + RSI + بولينجر + دعم/مقاومة"),
         ]
         for i, (icon, title, desc) in enumerate(features):
             with [col1, col2, col3][i % 3]:
@@ -290,27 +612,22 @@ def main():
                 logger.info(f"Analysis requested: {symbol} / {market}")
                 svc = StockDataService()
 
-                # Step 1: Fetch all data
                 status = st.empty()
                 status.info("📡 جلب البيانات الحية...")
                 raw = svc.get_all(symbol, market)
 
-                # Step 2: Technical analysis
                 status.info("📈 التحليل الفني...")
                 technical = {}
                 if raw.get("chart"):
                     technical = run_technical_analysis(raw["chart"])
 
-                # Step 3: Fundamentals
                 status.info("📊 التحليل الأساسي...")
                 fins = raw.get("fundamentals", {}) or {}
                 fund_scores = score_fundamentals(fins)
 
-                # Step 4: News sentiment
                 status.info("📰 تحليل الأخبار...")
                 news_sent = analyze_news_sentiment(raw.get("news", []))
 
-                # Step 5: AI Report
                 ai_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
                 if ai_key:
                     status.info("🤖 توليد التقرير الذكي...")
@@ -323,33 +640,30 @@ def main():
 
                 status.empty()
 
-                # Store result
                 st.session_state["result"] = {
-                    "symbol":     symbol,
-                    "market":     market,
-                    "raw":        raw,
-                    "technical":  technical,
-                    "fund_scores":fund_scores,
-                    "news_sent":  news_sent,
-                    "ai_report":  ai_report,
-                    "fins":       fins,
+                    "symbol":      symbol,
+                    "market":      market,
+                    "raw":         raw,
+                    "technical":   technical,
+                    "fund_scores": fund_scores,
+                    "news_sent":   news_sent,
+                    "ai_report":   ai_report,
+                    "fins":        fins,
                 }
                 logger.info(f"Analysis complete: {symbol}")
 
             except ValueError as e:
                 st.error(f"⚠️ {e}")
-                logger.error(f"ValueError for {symbol}: {e}")
                 return
             except Exception as e:
                 st.error(f"❌ خطأ في التحليل: {e}")
-                logger.exception(f"Unexpected error for {symbol}")
                 return
 
     # ── Display Results ───────────────────────────────────────────────────────
     if "result" not in st.session_state:
         return
 
-    r = st.session_state["result"]
+    r         = st.session_state["result"]
     raw       = r["raw"]
     technical = r["technical"]
     fund_sc   = r["fund_scores"]
@@ -364,7 +678,7 @@ def main():
     price      = quote.get("price") or (raw.get("chart",{}) or {}).get("closes",["—"])[-1]
     change     = quote.get("change", 0) or 0
     change_pct = quote.get("change_pct", 0) or 0
-    currency   = quote.get("currency") or fins.get("sector") or ""
+    currency   = quote.get("currency") or ""
     market_ar  = "🇸🇦 السوق السعودي" if r["market"] == "saudi" else "🇺🇸 السوق الأمريكي"
 
     up = change >= 0
@@ -408,9 +722,110 @@ def main():
                          score_color(fund_sc.get("overall_score",0)))
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_rec, tab_tech, tab_fund, tab_news, tab_raw = st.tabs([
-        "🎯 التوصية", "📈 التحليل الفني", "📋 الأساسي", "📰 الأخبار", "📦 البيانات الخام"
+    tab_chart, tab_rec, tab_tech, tab_fund, tab_news, tab_raw = st.tabs([
+        "🕯️ الرسم البياني", "🎯 التوصية", "📈 التحليل الفني",
+        "📋 الأساسي", "📰 الأخبار", "📦 البيانات الخام"
     ])
+
+    # ── TAB 0: Chart (الجديد) ─────────────────────────────────────────────────
+    with tab_chart:
+        chart_data = raw.get("chart") or {}
+
+        if not chart_data or not chart_data.get("closes"):
+            st.warning("⚠️ لا تتوفر بيانات تاريخية كافية لعرض الرسم البياني")
+        else:
+            section_header("🕯️ الرسم البياني التفاعلي")
+
+            # Summary stats above chart
+            closes  = chart_data.get("closes", [])
+            highs   = chart_data.get("highs", [])
+            lows    = chart_data.get("lows", [])
+            dates   = chart_data.get("dates", [])
+            volumes = chart_data.get("volumes", [])
+
+            if len(closes) >= 2:
+                last_close  = closes[-1]
+                first_close = closes[0]
+                period_chg  = last_close - first_close
+                period_pct  = (period_chg / first_close * 100) if first_close else 0
+                avg_vol     = sum(v for v in volumes if v) / len([v for v in volumes if v]) if volumes else 0
+                period_high = max(highs) if highs else 0
+                period_low  = min(lows) if lows else 0
+
+                m1, m2, m3, m4, m5 = st.columns(5)
+                with m1:
+                    metric_card(
+                        f"التغير ({len(closes)} يوم)",
+                        f"{'+' if period_chg >= 0 else ''}{period_chg:.2f}",
+                        "metric-green" if period_chg >= 0 else "metric-red"
+                    )
+                with m2:
+                    metric_card(
+                        "نسبة التغير",
+                        f"{'+' if period_pct >= 0 else ''}{period_pct:.1f}%",
+                        "metric-green" if period_pct >= 0 else "metric-red"
+                    )
+                with m3:
+                    metric_card("أعلى سعر", fmt_number(period_high), "metric-green")
+                with m4:
+                    metric_card("أدنى سعر", fmt_number(period_low), "metric-red")
+                with m5:
+                    metric_card("متوسط الحجم", fmt_number(avg_vol, "", 0), "metric-blue")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Build and display chart
+            fig = build_chart(
+                chart_data, technical,
+                symbol=r["symbol"],
+                currency=currency
+            )
+
+            if fig:
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True,
+                    config={
+                        "displayModeBar": True,
+                        "displaylogo": False,
+                        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                        "toImageButtonOptions": {
+                            "format": "png",
+                            "filename": f"chart_{r['symbol']}",
+                            "height": 700,
+                            "width": 1400,
+                            "scale": 2,
+                        },
+                    }
+                )
+
+            # Chart legend explanation
+            with st.expander("📖 دليل قراءة الرسم البياني"):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.markdown("""
+                    **🕯️ الشموع اليابانية**
+                    - 🟢 شمعة خضراء = إغلاق أعلى من الافتتاح (صعود)
+                    - 🔴 شمعة حمراء = إغلاق أقل من الافتتاح (هبوط)
+                    - الظل العلوي = أعلى سعر في اليوم
+                    - الظل السفلي = أدنى سعر في اليوم
+                    """)
+                with col2:
+                    st.markdown("""
+                    **📊 المتوسطات المتحركة**
+                    - 🔵 SMA 20 = متوسط 20 يوم (قصير المدى)
+                    - 🟡 SMA 50 = متوسط 50 يوم (متوسط المدى)
+                    - 🟠 SMA 200 = متوسط 200 يوم (طويل المدى)
+                    - السعر فوق المتوسطات = اتجاه صاعد ✅
+                    """)
+                with col3:
+                    st.markdown("""
+                    **📉 RSI (مؤشر القوة النسبية)**
+                    - فوق 70 = منطقة تشبع شرائي ⚠️ (بيع محتمل)
+                    - تحت 30 = منطقة تشبع بيعي ✅ (شراء محتمل)
+                    - 30-70 = منطقة محايدة
+                    - الخطوط الأرجوانية = بولينجر باندز
+                    """)
 
     # ── TAB 1: Recommendation ─────────────────────────────────────────────────
     with tab_rec:
@@ -433,7 +848,6 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-        # 4 scores
         c1, c2, c3, c4 = st.columns(4)
         with c1: metric_card("الفني", f"{technical.get('tech_score',0)}/100", score_color(technical.get("tech_score",0)))
         with c2: metric_card("الأساسي", f"{fund_sc.get('overall_score',0)}/100", score_color(fund_sc.get("overall_score",0)))
@@ -443,7 +857,6 @@ def main():
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # Targets
         entry = rec.get("entry_price", price)
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
@@ -467,7 +880,6 @@ def main():
         with c2:
             st.info(f"⏱️ **مدة التوصية:** {rec.get('timeframe','—')}")
 
-        # AI Summary
         section_header("🤖 تقرير الذكاء الاصطناعي")
         if ai.get("executive_summary"):
             st.markdown(f"""
@@ -496,7 +908,6 @@ def main():
         if not technical:
             st.warning("⚠️ لا تتوفر بيانات تاريخية كافية للتحليل الفني")
         else:
-            # Key indicators
             section_header("📊 المؤشرات الفنية الرئيسية")
             c1,c2,c3,c4,c5,c6,c7,c8 = st.columns(8)
             inds = [
@@ -513,7 +924,6 @@ def main():
                 with col_:
                     metric_card(label, fmt_number(val) if val else "—", color_fn(val))
 
-            # 6 Theories
             section_header("🔬 النظريات الستة")
             col1, col2 = st.columns(2)
 
@@ -538,7 +948,6 @@ def main():
                         if data.get("analysis"):
                             st.markdown(f"**التحليل:** {data['analysis']}")
 
-            # Candlesticks
             section_header("🕯️ نماذج الشموع اليابانية")
             candles = technical.get("candlesticks", [])
             if candles:
@@ -553,7 +962,6 @@ def main():
                         unsafe_allow_html=True
                     )
 
-            # Support & Resistance
             section_header("🎯 الدعم والمقاومة")
             sr = technical.get("support_resistance", {})
             col1, col2, col3 = st.columns(3)
@@ -570,7 +978,6 @@ def main():
                 for k, v in sr.get("fibonacci", {}).items():
                     st.metric(f"Fib {k}", fmt_number(v))
 
-            # AI Technical Narrative
             if ai.get("technical_narrative"):
                 section_header("🤖 تحليل فني تفصيلي")
                 st.markdown(ai["technical_narrative"])
