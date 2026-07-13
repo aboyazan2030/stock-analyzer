@@ -213,16 +213,23 @@ def build_chart(chart_data: dict, technical: dict, symbol: str, currency: str = 
     if not dates or not closes:
         return None
 
-    # تنظيف القيم غير الصالحة
+    # تنظيف القيم غير الصالحة — إزالة وليس استبدال بصفر
     import math
-    def clean(lst):
-        return [v if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))) else 0 for v in lst]
+    def is_valid(v):
+        try:
+            f = float(v)
+            return not (math.isnan(f) or math.isinf(f)) and f > 0
+        except Exception:
+            return False
 
-    closes  = clean(closes)
-    opens   = clean(opens)
-    highs   = clean(highs)
-    lows    = clean(lows)
-    volumes = [int(v) if v and not (isinstance(v, float) and math.isnan(v)) else 0 for v in volumes]
+    # نبني قائمة نظيفة مع الحفاظ على التزامن بين القوائم
+    valid_indices = [i for i in range(len(closes)) if is_valid(closes[i])]
+    closes  = [closes[i]  for i in valid_indices]
+    opens   = [opens[i]   for i in valid_indices if i < len(opens)]
+    highs   = [highs[i]   for i in valid_indices if i < len(highs)]
+    lows    = [lows[i]    for i in valid_indices if i < len(lows)]
+    volumes = [int(volumes[i]) if i < len(volumes) and is_valid(volumes[i]) else 0 for i in valid_indices]
+    dates   = [dates[i]   for i in valid_indices if i < len(dates)]
 
     # ── Layout: 3 rows (price 60% | RSI 20% | Volume 20%) ───────────────────
     fig = make_subplots(
