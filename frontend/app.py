@@ -527,6 +527,16 @@ def show_chart_controls(chart_data: dict) -> dict:
 # ─── Main App ─────────────────────────────────────────────────────────────────
 
 # ─── PDF Report Generator ──────────────────────────────────────────────────────
+def _ar(text: str) -> str:
+    """تحويل النص العربي لعرض صحيح في PDF."""
+    try:
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+        reshaped = arabic_reshaper.reshape(str(text))
+        return get_display(reshaped)
+    except Exception:
+        return str(text)
+
 def generate_pdf_report(symbol, name, price, currency, action, confidence,
                          entry, stop_loss, t1, t2, t3, rr, timeframe,
                          summary, catalysts, risks, reasoning,
@@ -573,7 +583,7 @@ def generate_pdf_report(symbol, name, price, currency, action, confidence,
     story.append(HRFlowable(width="100%", thickness=1, color=ACCENT, spaceAfter=10))
 
     story.append(Paragraph("RECOMMENDATION", sec))
-    story.append(Paragraph(str(action), acs))
+    story.append(Paragraph(_ar(str(action)), acs))
     story.append(Paragraph(f"Confidence: {confidence}%", ss))
     story.append(Spacer(1, 0.3*cm))
 
@@ -611,7 +621,7 @@ def generate_pdf_report(symbol, name, price, currency, action, confidence,
     story.append(tg_t)
     story.append(Spacer(1, 0.3*cm))
 
-    rr_d = [["Risk/Reward","Timeframe"],[f"1:{rr}",str(timeframe)]]
+    rr_d = [["Risk/Reward","Timeframe"],[f"1:{rr}", _ar(str(timeframe))]]
     rr_t = Table(rr_d, colWidths=[8.25*cm,8.25*cm])
     rr_t.setStyle(TableStyle([
         ("BACKGROUND",(0,0),(-1,0),CARD),("BACKGROUND",(0,1),(-1,1),DARK),
@@ -628,7 +638,7 @@ def generate_pdf_report(symbol, name, price, currency, action, confidence,
         story.append(Spacer(1,0.4*cm))
         story.append(HRFlowable(width="100%",thickness=0.5,color=GRAY,spaceAfter=6))
         story.append(Paragraph("EXECUTIVE SUMMARY", sec))
-        story.append(Paragraph(summary[:600], bod))
+        story.append(Paragraph(_ar(summary[:600]), bod))
 
     if catalysts or risks:
         cats = (catalysts or [])[:4]
@@ -636,8 +646,8 @@ def generate_pdf_report(symbol, name, price, currency, action, confidence,
         max_rows = max(len(cats), len(rsks))
         cr_d = [["CATALYSTS","RISKS"]]
         for i in range(max_rows):
-            c = f"+ {cats[i][:55]}" if i < len(cats) else ""
-            r = f"- {rsks[i][:55]}" if i < len(rsks) else ""
+            c = _ar(f"+ {cats[i][:55]}") if i < len(cats) else ""
+            r = _ar(f"- {rsks[i][:55]}") if i < len(rsks) else ""
             cr_d.append([c, r])
         cr_t = Table(cr_d, colWidths=[8.25*cm,8.25*cm])
         cr_t.setStyle(TableStyle([
@@ -661,7 +671,7 @@ def generate_pdf_report(symbol, name, price, currency, action, confidence,
     if reasoning:
         story.append(Spacer(1,0.3*cm))
         story.append(Paragraph("REASONING", sec))
-        story.append(Paragraph(str(reasoning)[:400], bod))
+        story.append(Paragraph(_ar(str(reasoning)[:400]), bod))
 
     story.append(Spacer(1,0.5*cm))
     story.append(HRFlowable(width="100%",thickness=0.5,color=GRAY))
