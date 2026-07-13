@@ -241,9 +241,17 @@ def _smart_rule_based_report(
     يستخدم المؤشرات الفنية والأساسية والأخبار لبناء تقرير احترافي.
     """
 
+    # ── دالة مساعدة للتحقق من الأرقام ───────────────────────────────────────
+    def safe_num(v, default=0):
+        try:
+            f = float(v) if v is not None else default
+            return default if (f != f or f == float("inf") or f == float("-inf")) else f
+        except Exception:
+            return default
+
     # ── استخراج البيانات الفنية ──────────────────────────────────────────────
-    rsi_val   = technical.get("rsi") or 50
-    macd_hist = technical.get("macd_hist") or 0
+    rsi_val   = safe_num(technical.get("rsi"), 50)
+    macd_hist = safe_num(technical.get("macd_hist"), 0)
     sma20     = technical.get("sma20")
     sma50     = technical.get("sma50")
     sma200    = technical.get("sma200")
@@ -309,9 +317,13 @@ def _smart_rule_based_report(
     t2 = round(resistances[1] if len(resistances) > 1 else price * 1.10, 3)
     t3 = round(resistances[2] if len(resistances) > 2 else price * 1.18, 3)
 
-    if price > stop_loss and (t2 - price) > 0:
-        rr = round((t2 - price) / (price - stop_loss), 1)
-    else:
+    try:
+        if price and stop_loss and price > stop_loss and (t2 - price) > 0:
+            rr_raw = (t2 - price) / (price - stop_loss)
+            rr = round(rr_raw, 1) if rr_raw == rr_raw and rr_raw != float("inf") and rr_raw < 20 else 1.5
+        else:
+            rr = 1.5
+    except Exception:
         rr = 1.5
 
     # تحديد مدة التوصية
