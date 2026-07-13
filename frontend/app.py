@@ -525,6 +525,151 @@ def show_chart_controls(chart_data: dict) -> dict:
 
 
 # ─── Main App ─────────────────────────────────────────────────────────────────
+
+# ─── PDF Report Generator ──────────────────────────────────────────────────────
+def generate_pdf_report(symbol, name, price, currency, action, confidence,
+                         entry, stop_loss, t1, t2, t3, rr, timeframe,
+                         summary, catalysts, risks, reasoning,
+                         tech_score, fund_score, news_score):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.lib.enums import TA_CENTER
+    import io
+    from datetime import datetime
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4,
+        rightMargin=2*cm, leftMargin=2*cm,
+        topMargin=2*cm, bottomMargin=2*cm)
+
+    DARK   = colors.HexColor("#070B14")
+    ACCENT = colors.HexColor("#00C4FF")
+    GREEN  = colors.HexColor("#00E676")
+    RED    = colors.HexColor("#FF3D5A")
+    GOLD   = colors.HexColor("#F4C430")
+    LIGHT  = colors.HexColor("#E8EDF5")
+    GRAY   = colors.HexColor("#6B7A99")
+    CARD   = colors.HexColor("#111827")
+
+    action_color = GREEN if "شراء" in action else RED if "بيع" in action else GOLD if "جني" in action else ACCENT
+
+    def ps(name, **kw):
+        return ParagraphStyle(name, **kw)
+
+    ts  = ps("T", fontSize=20, textColor=ACCENT, alignment=TA_CENTER, fontName="Helvetica-Bold", spaceAfter=4)
+    ss  = ps("S", fontSize=10, textColor=GRAY,   alignment=TA_CENTER, fontName="Helvetica",      spaceAfter=2)
+    acs = ps("A", fontSize=32, textColor=action_color, alignment=TA_CENTER, fontName="Helvetica-Bold", spaceAfter=4)
+    sec = ps("H", fontSize=12, textColor=ACCENT, fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=4)
+    bod = ps("B", fontSize=9,  textColor=LIGHT,  fontName="Helvetica", spaceAfter=3, leading=15)
+    sml = ps("M", fontSize=8,  textColor=GRAY,   fontName="Helvetica", spaceAfter=2, alignment=TA_CENTER)
+
+    story = []
+    story.append(Paragraph("Stock Analyzer Pro", ts))
+    story.append(Paragraph(f"{symbol}  |  {name}", ss))
+    story.append(Paragraph(f"Price: {price:.3f} {currency}  |  {datetime.now().strftime('%Y-%m-%d %H:%M')}", ss))
+    story.append(HRFlowable(width="100%", thickness=1, color=ACCENT, spaceAfter=10))
+
+    story.append(Paragraph("RECOMMENDATION", sec))
+    story.append(Paragraph(str(action), acs))
+    story.append(Paragraph(f"Confidence: {confidence}%", ss))
+    story.append(Spacer(1, 0.3*cm))
+
+    sc_d = [["Technical","Fundamental","News"],[f"{tech_score}/100",f"{fund_score}/100",f"{news_score}/100"]]
+    sc_t = Table(sc_d, colWidths=[5.5*cm,5.5*cm,5.5*cm])
+    sc_t.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,0),CARD),("BACKGROUND",(0,1),(-1,1),DARK),
+        ("TEXTCOLOR",(0,0),(-1,0),GRAY),("TEXTCOLOR",(0,1),(-1,1),ACCENT),
+        ("FONTNAME",(0,0),(-1,-1),"Helvetica-Bold"),
+        ("FONTSIZE",(0,0),(-1,0),9),("FONTSIZE",(0,1),(-1,1),15),
+        ("ALIGN",(0,0),(-1,-1),"CENTER"),("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("GRID",(0,0),(-1,-1),0.5,colors.HexColor("#1A2540")),
+        ("TOPPADDING",(0,0),(-1,-1),8),("BOTTOMPADDING",(0,0),(-1,-1),8),
+    ]))
+    story.append(sc_t)
+    story.append(Spacer(1, 0.4*cm))
+
+    story.append(HRFlowable(width="100%", thickness=0.5, color=GRAY, spaceAfter=6))
+    story.append(Paragraph("PRICE TARGETS", sec))
+    tg_d = [["Entry","Stop Loss","Target 1","Target 2","Target 3"],
+            [f"{entry:.3f}",f"{stop_loss:.3f}",f"{t1:.3f}",f"{t2:.3f}",f"{t3:.3f}"]]
+    tg_t = Table(tg_d, colWidths=[3.3*cm]*5)
+    tg_t.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,0),CARD),
+        ("BACKGROUND",(0,1),(0,1),DARK),("BACKGROUND",(1,1),(1,1),colors.HexColor("#2D0A12")),
+        ("BACKGROUND",(2,1),(-1,1),colors.HexColor("#0A2D16")),
+        ("TEXTCOLOR",(0,0),(-1,0),GRAY),
+        ("TEXTCOLOR",(0,1),(0,1),ACCENT),("TEXTCOLOR",(1,1),(1,1),RED),("TEXTCOLOR",(2,1),(-1,1),GREEN),
+        ("FONTNAME",(0,0),(-1,-1),"Helvetica-Bold"),
+        ("FONTSIZE",(0,0),(-1,0),8),("FONTSIZE",(0,1),(-1,1),12),
+        ("ALIGN",(0,0),(-1,-1),"CENTER"),("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("GRID",(0,0),(-1,-1),0.5,colors.HexColor("#1A2540")),
+        ("TOPPADDING",(0,0),(-1,-1),8),("BOTTOMPADDING",(0,0),(-1,-1),8),
+    ]))
+    story.append(tg_t)
+    story.append(Spacer(1, 0.3*cm))
+
+    rr_d = [["Risk/Reward","Timeframe"],[f"1:{rr}",str(timeframe)]]
+    rr_t = Table(rr_d, colWidths=[8.25*cm,8.25*cm])
+    rr_t.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,0),CARD),("BACKGROUND",(0,1),(-1,1),DARK),
+        ("TEXTCOLOR",(0,0),(-1,0),GRAY),("TEXTCOLOR",(0,1),(-1,1),LIGHT),
+        ("FONTNAME",(0,0),(-1,-1),"Helvetica-Bold"),
+        ("FONTSIZE",(0,0),(-1,0),9),("FONTSIZE",(0,1),(-1,1),11),
+        ("ALIGN",(0,0),(-1,-1),"CENTER"),("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("GRID",(0,0),(-1,-1),0.5,colors.HexColor("#1A2540")),
+        ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
+    ]))
+    story.append(rr_t)
+
+    if summary:
+        story.append(Spacer(1,0.4*cm))
+        story.append(HRFlowable(width="100%",thickness=0.5,color=GRAY,spaceAfter=6))
+        story.append(Paragraph("EXECUTIVE SUMMARY", sec))
+        story.append(Paragraph(summary[:600], bod))
+
+    if catalysts or risks:
+        cats = (catalysts or [])[:4]
+        rsks = (risks or [])[:4]
+        max_rows = max(len(cats), len(rsks))
+        cr_d = [["CATALYSTS","RISKS"]]
+        for i in range(max_rows):
+            c = f"+ {cats[i][:55]}" if i < len(cats) else ""
+            r = f"- {rsks[i][:55]}" if i < len(rsks) else ""
+            cr_d.append([c, r])
+        cr_t = Table(cr_d, colWidths=[8.25*cm,8.25*cm])
+        cr_t.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(0,0),colors.HexColor("#0A2D16")),
+            ("BACKGROUND",(1,0),(1,0),colors.HexColor("#2D0A12")),
+            ("BACKGROUND",(0,1),(-1,-1),DARK),
+            ("TEXTCOLOR",(0,0),(0,0),GREEN),("TEXTCOLOR",(1,0),(1,0),RED),
+            ("TEXTCOLOR",(0,1),(0,-1),colors.HexColor("#A7F3D0")),
+            ("TEXTCOLOR",(1,1),(1,-1),colors.HexColor("#FCA5A5")),
+            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+            ("FONTNAME",(0,1),(-1,-1),"Helvetica"),
+            ("FONTSIZE",(0,0),(-1,-1),9),
+            ("ALIGN",(0,0),(-1,-1),"LEFT"),("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ("GRID",(0,0),(-1,-1),0.5,colors.HexColor("#1A2540")),
+            ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
+            ("LEFTPADDING",(0,0),(-1,-1),8),
+        ]))
+        story.append(Spacer(1,0.3*cm))
+        story.append(cr_t)
+
+    if reasoning:
+        story.append(Spacer(1,0.3*cm))
+        story.append(Paragraph("REASONING", sec))
+        story.append(Paragraph(str(reasoning)[:400], bod))
+
+    story.append(Spacer(1,0.5*cm))
+    story.append(HRFlowable(width="100%",thickness=0.5,color=GRAY))
+    story.append(Paragraph("Generated by Stock Analyzer Pro | For informational purposes only.", sml))
+
+    doc.build(story)
+    return buffer.getvalue()
+
 def main():
     # Sidebar
     with st.sidebar:
@@ -897,6 +1042,43 @@ def main():
             st.info(f"⚖️ **نسبة المخاطرة/العائد:** {rec.get('risk_reward','—')}")
         with c2:
             st.info(f"⏱️ **مدة التوصية:** {rec.get('timeframe','—')}")
+
+        # ── زر تصدير PDF ──────────────────────────────────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_pdf, col_empty = st.columns([1, 3])
+        with col_pdf:
+            try:
+                pdf_bytes = generate_pdf_report(
+                    symbol       = r["symbol"],
+                    name         = quote.get("name", r["symbol"]),
+                    price        = float(quote.get("price") or 0),
+                    currency     = quote.get("currency", ""),
+                    action       = rec.get("action", "—"),
+                    confidence   = rec.get("confidence", 0),
+                    entry        = float(rec.get("entry_price") or 0),
+                    stop_loss    = float(rec.get("stop_loss") or 0),
+                    t1           = float(rec.get("target1") or 0),
+                    t2           = float(rec.get("target2") or 0),
+                    t3           = float(rec.get("target3") or 0),
+                    rr           = rec.get("risk_reward", "—"),
+                    timeframe    = rec.get("timeframe", "—"),
+                    summary      = ai.get("executive_summary", ""),
+                    catalysts    = ai.get("catalysts", []),
+                    risks        = ai.get("risks", []),
+                    reasoning    = rec.get("reasoning", ""),
+                    tech_score   = technical.get("tech_score", 0),
+                    fund_score   = fund_sc.get("overall_score", 0),
+                    news_score   = news_s.get("score", 0),
+                )
+                st.download_button(
+                    label="📄 تحميل التقرير PDF",
+                    data=pdf_bytes,
+                    file_name=f"report_{r['symbol']}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as pdf_err:
+                st.warning(f"⚠️ تعذّر توليد PDF: {pdf_err}")
 
         section_header("🤖 تقرير الذكاء الاصطناعي")
         if ai.get("executive_summary"):
