@@ -213,6 +213,17 @@ def build_chart(chart_data: dict, technical: dict, symbol: str, currency: str = 
     if not dates or not closes:
         return None
 
+    # تنظيف القيم غير الصالحة
+    import math
+    def clean(lst):
+        return [v if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))) else 0 for v in lst]
+
+    closes  = clean(closes)
+    opens   = clean(opens)
+    highs   = clean(highs)
+    lows    = clean(lows)
+    volumes = [int(v) if v and not (isinstance(v, float) and math.isnan(v)) else 0 for v in volumes]
+
     # ── Layout: 3 rows (price 60% | RSI 20% | Volume 20%) ───────────────────
     fig = make_subplots(
         rows=3, cols=1,
@@ -744,7 +755,10 @@ def main():
                 last_close  = closes[-1]
                 first_close = closes[0]
                 period_chg  = last_close - first_close
-                period_pct  = (period_chg / first_close * 100) if first_close else 0
+                period_pct  = (period_chg / first_close * 100) if first_close and first_close != 0 else 0
+                import math
+                period_pct  = 0 if math.isnan(period_pct) or math.isinf(period_pct) else period_pct
+                period_chg  = 0 if math.isnan(period_chg) or math.isinf(period_chg) else period_chg
                 avg_vol     = sum(v for v in volumes if v) / len([v for v in volumes if v]) if volumes else 0
                 period_high = max(highs) if highs else 0
                 period_low  = min(lows) if lows else 0
